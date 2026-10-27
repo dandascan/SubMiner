@@ -386,6 +386,13 @@ export interface ConfigHotReloadPayload {
   secondarySubMode: SecondarySubMode;
 }
 
+/** Content of the shared plugin panel. `panelId` changes each time a plugin opens a new panel. */
+export interface PluginPanelSnapshot {
+  panelId: number;
+  title: string;
+  markdown: string;
+}
+
 export interface SessionActionDispatchRequest {
   actionId: SessionActionId;
   payload?: SessionActionPayload;
@@ -536,6 +543,9 @@ export interface ElectronAPI {
   onOpenSessionHelp: (callback: (payload: SessionHelpOpenPayload) => void) => void;
   onOpenChangelog: (callback: () => void) => void;
   getChangelogSnapshot: (options?: { refresh?: boolean }) => Promise<ChangelogSnapshot>;
+  onOpenPluginPanel: (callback: (snapshot: PluginPanelSnapshot) => void) => void;
+  onPluginPanelUpdate: (callback: (snapshot: PluginPanelSnapshot) => void) => void;
+  onPluginPanelClose: (callback: (panelId: number) => void) => void;
   onOpenControllerSelect: (callback: () => void) => void;
   onOpenControllerDebug: (callback: () => void) => void;
   onOpenJimaku: (callback: () => void) => void;
@@ -613,7 +623,8 @@ export interface ElectronAPI {
       | 'subtitle-sidebar'
       | 'session-help'
       | 'character-dictionary'
-      | 'changelog',
+      | 'changelog'
+      | 'plugin-panel',
   ) => void;
   notifyOverlayModalOpened: (
     modal:
@@ -632,7 +643,8 @@ export interface ElectronAPI {
       | 'subtitle-sidebar'
       | 'session-help'
       | 'character-dictionary'
-      | 'changelog',
+      | 'changelog'
+      | 'plugin-panel',
   ) => void;
   reportOverlayContentBounds: (measurement: OverlayContentMeasurement) => void;
   onSessionBindingsChanged: (callback: (bindings: CompiledSessionBinding[]) => void) => void;

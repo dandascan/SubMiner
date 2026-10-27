@@ -512,6 +512,13 @@ import { openSubsyncManualModal as openSubsyncManualModalRuntime } from './main/
 import { openSessionHelpModal as openSessionHelpModalRuntime } from './main/runtime/session-help-open';
 import { openChangelogModal as openChangelogModalRuntime } from './main/runtime/changelog-open';
 import { createChangelogRuntime } from './main/runtime/changelog/changelog-runtime';
+import { createPluginHost } from './core/services/plugins/plugin-host';
+import { buildPluginSubtitleContext } from './core/services/plugins/subtitle-context';
+import type { PluginSubtitleLine } from './core/services/plugins/types';
+import {
+  createPluginPanelRuntime,
+  openPluginPanelModal,
+} from './main/runtime/plugin-panel-runtime';
 import { openCharacterDictionaryManagerModal as openCharacterDictionaryManagerModalRuntime } from './main/runtime/character-dictionary-open';
 import { openControllerSelectModal as openControllerSelectModalRuntime } from './main/runtime/controller-select-open';
 import { openControllerDebugModal as openControllerDebugModalRuntime } from './main/runtime/controller-debug-open';
@@ -3078,6 +3085,77 @@ function createOverlayHostedModalOpenDeps(): {
   };
 }
 
+const pluginPanelRuntime = createPluginPanelRuntime({
+  openModal: (getSnapshot) => openPluginPanelModal(createOverlayHostedModalOpenDeps(), getSnapshot),
+  // The panel may live in either window; broadcastToOverlayWindows only reaches the main one.
+  broadcast: (channel, payload) => {
+    for (const window of [overlayManager.getMainWindow(), overlayManager.getModalWindow()]) {
+      if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
+    }
+  },
+  onOpenFailed: () =>
+    overlayNotificationsRuntime.showConfiguredStatusNotification('Plugin panel unavailable.', {
+      variant: 'warning',
+    }),
+});
+
+function getPluginCurrentSubtitle(): PluginSubtitleLine | null {
+  const text = appState.currentSubText.trim();
+  if (!text) return null;
+  // Same view as mining: the parsed line with its cue timings on the subtitle file's timeline.
+  const resolved = resolvePrimarySubtitle({
+    liveText: appState.mpvClient?.currentSubText ?? '',
+    currentTimeSec: Number(appState.mpvClient?.currentTimePos),
+    cues: appState.activeParsedSubtitleCues,
+  });
+  const resolvedText = resolved?.text.replace(/\n{2,}/g, '\n').trim();
+  if (
+    resolved &&
+    resolvedText &&
+    Number.isFinite(resolved.startTime) &&
+    Number.isFinite(resolved.endTime) &&
+    resolved.endTime > resolved.startTime
+  ) {
+    return { text: resolvedText, startTime: resolved.startTime, endTime: resolved.endTime };
+  }
+  const client = appState.mpvClient;
+  // The client reports a cleared sub-start as zero, so only trust timing for a live line.
+  const hasTiming = client !== null && client.currentSubEnd > client.currentSubStart;
+  return {
+    text,
+    startTime: hasTiming ? client.currentSubStart : null,
+    endTime: hasTiming ? client.currentSubEnd : null,
+  };
+}
+
+const pluginHost = createPluginHost({
+  pluginsDir: path.join(CONFIG_DIR, 'plugins'),
+  getPluginConfig: () => configService.getConfig().plugins,
+  createLogger,
+  isMpvConnected: () => appState.mpvClient?.connected === true,
+  sendMpvCommand: (command) => sendMpvCommandRuntime(appState.mpvClient, command),
+  requestMpvProperty: async (name) => {
+    if (!appState.mpvClient) throw new Error('mpv is not connected.');
+    return await appState.mpvClient.requestProperty(name);
+  },
+  getCurrentSubtitle: () => getPluginCurrentSubtitle(),
+  getSubtitleContext: (options) =>
+    buildPluginSubtitleContext({
+      cues: appState.activeParsedSubtitleCues,
+      current: getPluginCurrentSubtitle(),
+      recentLines: (appState.subtitleTimingTracker?.getRecentEntries(40) ?? []).map((entry) => ({
+        text: entry.displayText,
+        startTime: entry.startTime,
+        endTime: entry.endTime,
+      })),
+      ...options,
+    }),
+  notify: (message, variant) =>
+    overlayNotificationsRuntime.showConfiguredStatusNotification(message, { variant }),
+  openPanel: (content) => pluginPanelRuntime.open(content),
+  unstable: { appState, configService, overlayManager },
+});
+
 const mediaTimingFrameExtractor = createMediaTimingFrameExtractor();
 const mediaTimingReviewRuntime = createMediaTimingReviewRuntime({
   getMpvClient: () => appState.mpvClient,
@@ -4583,6 +4661,9 @@ const { appReadyRuntimeRunner } = composeAppReadyRuntime({
     createMpvClient: () => {
       appState.mpvClient = createMpvClientRuntimeService();
     },
+    startPlugins: () => {
+      void pluginHost.loadAll();
+    },
     getResolvedConfig: () => configService.getConfig(),
     getConfigWarnings: () => configService.getWarnings(),
     logConfigWarning: (warning) => appLogger.logConfigWarning(warning),
@@ -5279,6 +5360,7 @@ function createMpvClientRuntimeService(): MpvIpcClient {
   client.on('media-path-change', aniSkipRuntime.handleMediaPathChange);
   client.on('time-pos-change', aniSkipRuntime.handleTimePosChange);
   client.on('client-message', aniSkipRuntime.handleClientMessage);
+  pluginHost.attachMpvClient(client);
   return client;
 }
 
@@ -5860,6 +5942,7 @@ async function dispatchSessionAction(request: SessionActionDispatchRequest): Pro
     },
     playNextPlaylistItem: () =>
       sendMpvCommandRuntime(appState.mpvClient, ['playlist-next', 'force']),
+    runPluginAction: (pluginActionId) => pluginHost.runAction(pluginActionId),
     showMpvOsd: (text) => showConfiguredPlaybackFeedback(text),
   });
 }
@@ -5944,6 +6027,9 @@ const { registerIpcRuntimeHandlers } = composeIpcRuntimeHandlers({
       onOverlayModalClosed: (modal, senderWindow) => {
         if (modal === 'media-timing-review') {
           void mediaTimingReviewRuntime.dispose();
+        }
+        if (modal === 'plugin-panel') {
+          pluginPanelRuntime.handleModalClosed();
         }
         if (modal === 'subtitle-sidebar' && senderWindow === overlayManager.getMainWindow()) {
           subtitleSidebarRequestedOpen = false;
@@ -6961,3 +7047,4 @@ registerSubtitleGenerationIpc({
   openModal: () => openSubtitleGenerationModal(createOverlayHostedModalOpenDeps()),
 });
 app.on('before-quit', () => subtitleGenerationRuntime.cancel());
+app.on('before-quit', () => void pluginHost.unloadAll());

@@ -29,7 +29,8 @@ export type SessionActionId =
   | 'openPlaylistBrowser'
   | 'replayCurrentSubtitle'
   | 'playNextSubtitle'
-  | 'cycleRuntimeOption';
+  | 'cycleRuntimeOption'
+  | 'runPluginAction';
 
 export interface SessionKeySpec {
   code: string;
@@ -53,6 +54,8 @@ export interface SessionActionPayload {
   count?: number;
   runtimeOptionId?: string;
   direction?: 1 | -1;
+  /** `<plugin id>/<action name>` for runPluginAction. */
+  pluginActionId?: string;
 }
 
 type CompiledSessionBindingBase = {

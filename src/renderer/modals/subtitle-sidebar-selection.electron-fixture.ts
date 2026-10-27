@@ -101,6 +101,7 @@ export async function setup() {
     handleControllerDebugKeydown: () => false,
     handleSessionHelpKeydown: () => false,
     handleChangelogKeydown: () => false,
+    handlePluginPanelKeydown: () => false,
     openSessionHelpModal: () => {},
     getPlaybackPaused: async () => false,
   });
