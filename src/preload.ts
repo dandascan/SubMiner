@@ -532,8 +532,8 @@ const electronAPI: ElectronAPI = {
       mediaId,
       direction,
     ),
-  notifyOverlayModalClosed: (modal) => {
-    ipcRenderer.send(IPC_CHANNELS.command.overlayModalClosed, modal);
+  notifyOverlayModalClosed: (modal, instanceId) => {
+    ipcRenderer.send(IPC_CHANNELS.command.overlayModalClosed, modal, instanceId);
   },
   notifyOverlayModalOpened: (modal) => {
     ipcRenderer.send(IPC_CHANNELS.command.overlayModalOpened, modal);

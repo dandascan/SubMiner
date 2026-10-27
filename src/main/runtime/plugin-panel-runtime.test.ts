@@ -44,12 +44,23 @@ test('closing from the overlay aborts the handle and ignores later updates', asy
   await new Promise((resolve) => setImmediate(resolve));
   const sentBefore = h.sent.length;
 
-  h.runtime.handleModalClosed();
+  h.runtime.handleModalClosed(1);
   panel.update({ markdown: 'too late' });
 
   assert.equal(panel.signal.aborted, true);
   assert.equal(panel.closed, true);
   assert.equal(h.sent.length, sentBefore);
+});
+
+test('a late close acknowledgement for a replaced panel leaves the new panel open', () => {
+  const h = createHarness(Promise.resolve(true));
+  const first = h.runtime.open({ title: 'One', markdown: '' });
+  first.close();
+  const second = h.runtime.open({ title: 'Two', markdown: '' });
+
+  h.runtime.handleModalClosed(1);
+
+  assert.equal(second.signal.aborted, false);
 });
 
 test('opening a new panel aborts the previous one', () => {

@@ -103,9 +103,9 @@ export function createPluginPanelRuntime(deps: {
       };
     },
 
-    /** The user closed the panel in the overlay. */
-    handleModalClosed(): void {
-      if (active) finish(active);
+    /** The overlay closed `panelId`; a late notice for an already replaced panel is ignored. */
+    handleModalClosed(panelId: number): void {
+      if (active?.panelId === panelId) finish(active);
     },
   };
 }

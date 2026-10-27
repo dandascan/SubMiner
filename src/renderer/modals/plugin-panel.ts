@@ -60,12 +60,13 @@ export function createPluginPanelModal(
   function closePluginPanelModal(): void {
     if (!ctx.state.pluginPanelModalOpen) return;
 
+    const closedPanelId = panelId ?? undefined;
     ctx.state.pluginPanelModalOpen = false;
     panelId = null;
     options.syncSettingsModalSubtitleSuppression();
     ctx.dom.pluginPanelModal.classList.add('hidden');
     ctx.dom.pluginPanelModal.setAttribute('aria-hidden', 'true');
-    window.electronAPI.notifyOverlayModalClosed('plugin-panel');
+    window.electronAPI.notifyOverlayModalClosed('plugin-panel', closedPanelId);
     if (!ctx.state.isOverSubtitle && !options.modalStateReader.isAnyModalOpen()) {
       ctx.dom.overlay.classList.remove('interactive');
     }

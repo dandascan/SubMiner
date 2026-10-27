@@ -625,6 +625,8 @@ export interface ElectronAPI {
       | 'character-dictionary'
       | 'changelog'
       | 'plugin-panel',
+    /** Which instance closed, for modals that swap content in place (the plugin panel's id). */
+    instanceId?: number,
   ) => void;
   notifyOverlayModalOpened: (
     modal:

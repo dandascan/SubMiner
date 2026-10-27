@@ -6024,12 +6024,12 @@ const { registerIpcRuntimeHandlers } = composeIpcRuntimeHandlers({
           return false;
         }
       },
-      onOverlayModalClosed: (modal, senderWindow) => {
+      onOverlayModalClosed: (modal, senderWindow, instanceId) => {
         if (modal === 'media-timing-review') {
           void mediaTimingReviewRuntime.dispose();
         }
-        if (modal === 'plugin-panel') {
-          pluginPanelRuntime.handleModalClosed();
+        if (modal === 'plugin-panel' && instanceId !== undefined) {
+          pluginPanelRuntime.handleModalClosed(instanceId);
         }
         if (modal === 'subtitle-sidebar' && senderWindow === overlayManager.getMainWindow()) {
           subtitleSidebarRequestedOpen = false;
