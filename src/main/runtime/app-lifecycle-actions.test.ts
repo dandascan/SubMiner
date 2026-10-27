@@ -55,6 +55,7 @@ function makeCleanupDeps(calls: string[], overrides: Partial<CleanupDeps> = {}):
     cleanupRemoteMediaWindows: record('cleanupRemoteMediaWindows'),
     cleanupJellyfinSubtitleCache: record('cleanupJellyfinSubtitleCache'),
     stopDiscordPresenceService: record('stopDiscordPresenceService'),
+    unloadPlugins: record('unloadPlugins'),
     ...overrides,
   };
 }
@@ -97,6 +98,31 @@ test('on will quit cleanup handler flushes before teardown and awaits stats befo
   assert.ok(calls.indexOf('flushMpvLog') < calls.indexOf('destroyMpvSocket'));
   assert.ok(calls.indexOf('stopStatsServer:complete') < calls.indexOf('destroyImmersionTracker'));
   assert.ok(calls.indexOf('destroyImmersionTracker') < calls.indexOf('destroyAnkiIntegration'));
+});
+
+test('on will quit cleanup handler starts plugin unload first and waits for it to settle', async () => {
+  const calls: string[] = [];
+  let finishUnload!: () => void;
+  const cleanup = createOnWillQuitCleanupHandler(
+    makeCleanupDeps(calls, {
+      unloadPlugins: () => {
+        calls.push('unloadPlugins');
+        return new Promise<void>((resolve) => (finishUnload = resolve));
+      },
+    }),
+  );
+
+  let settled = false;
+  const pending = cleanup().then(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls[0], 'unloadPlugins');
+  assert.equal(settled, false);
+
+  finishUnload();
+  await pending;
+  assert.equal(settled, true);
 });
 
 test('on will quit cleanup handler cleans subtitle caches when stopping remote session fails', async () => {

@@ -59,8 +59,14 @@ export function createOnWillQuitCleanupHandler(deps: {
   cleanupRemoteMediaWindows: () => void;
   cleanupJellyfinSubtitleCache: () => void;
   stopDiscordPresenceService: () => void;
+  unloadPlugins: () => void | Promise<void>;
 }) {
   return async (): Promise<void> => {
+    const cleanupErrors: unknown[] = [];
+    // Plugins deactivate first, while the app is still intact; the host bounds how long that takes.
+    const unloadPlugins = (async () => deps.unloadPlugins())().catch((error: unknown) => {
+      cleanupErrors.push(error);
+    });
     deps.destroyTray();
     deps.stopConfigHotReload();
     deps.restorePreviousSecondarySubVisibility();
@@ -68,7 +74,6 @@ export function createOnWillQuitCleanupHandler(deps: {
     deps.unregisterAllGlobalShortcuts();
     deps.stopSubtitleWebsocket();
     deps.stopTexthookerService();
-    const cleanupErrors: unknown[] = [];
     const stopSyncAutoScheduler = Promise.resolve(deps.stopSyncAutoScheduler()).catch(
       (error: unknown) => {
         cleanupErrors.push(error);
@@ -118,6 +123,7 @@ export function createOnWillQuitCleanupHandler(deps: {
     deps.cleanupRemoteMediaWindows();
     deps.stopDiscordPresenceService();
     await stopSyncAutoScheduler;
+    await unloadPlugins;
     if (cleanupErrors.length > 0) {
       throw cleanupErrors[0];
     }

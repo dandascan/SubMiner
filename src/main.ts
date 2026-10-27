@@ -4403,6 +4403,7 @@ const {
       void appState.discordPresenceService?.stop();
       appState.discordPresenceService = null;
     },
+    unloadPlugins: () => pluginHost.unloadAll(),
   },
   shouldRestoreWindowsOnActivateMainDeps: {
     isOverlayRuntimeInitialized: () => appState.overlayRuntimeInitialized,
@@ -7067,4 +7068,3 @@ registerSubtitleGenerationIpc({
   openModal: () => openSubtitleGenerationModal(createOverlayHostedModalOpenDeps()),
 });
 app.on('before-quit', () => subtitleGenerationRuntime.cancel());
-app.on('before-quit', () => void pluginHost.unloadAll());

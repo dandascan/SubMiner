@@ -42,7 +42,10 @@ function createFakeWindow() {
   return fake;
 }
 
-function createHarness(config: Record<string, PluginConfigEntry>) {
+function createHarness(
+  config: Record<string, PluginConfigEntry>,
+  overrides: Partial<PluginHostDeps<{ marker: string }>> = {},
+) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'subminer-plugins-'));
   const errors: string[] = [];
   const notifications: string[] = [];
@@ -82,6 +85,7 @@ function createHarness(config: Record<string, PluginConfigEntry>) {
       return { window: window.asWindow(), created: true };
     },
     unstable: { marker: 'internals' },
+    ...overrides,
   };
   return {
     root: deps.pluginsDir,
@@ -222,6 +226,30 @@ test('mpv listener errors are contained and unload detaches listeners and calls 
     await h.host.unloadAll();
     client.emit('pause-change', { paused: false });
     assert.deepEqual(h.notifications, ['paused=true', 'deactivated']);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('unload gives up on a deactivate that never settles and still disposes the plugin', async () => {
+  const h = createHarness({ stuck: enabled() }, { deactivateTimeoutMs: 20 });
+  const client = createFakeMpvClient();
+  try {
+    writePlugin(h.root, 'stuck', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = (ctx) => {
+        ctx.mpv.on('pause-change', () => ctx.notify('still listening'));
+        return () => new Promise(() => {});
+      };`,
+    });
+    h.host.attachMpvClient(client);
+    await h.host.loadAll();
+
+    await h.host.unloadAll();
+    client.emit('pause-change', { paused: true });
+
+    assert.deepEqual(h.notifications, []);
+    assert.deepEqual(h.errors, ['deactivate failed: timed out after 20 ms']);
   } finally {
     h.cleanup();
   }

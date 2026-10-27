@@ -25,6 +25,8 @@ import {
 const MIN_TIMER_INTERVAL_MS = 100;
 const DEFAULT_WINDOW_WIDTH = 960;
 const DEFAULT_WINDOW_HEIGHT = 720;
+// Quit waits for unloadAll, so a deactivate that never settles must not hold the app open.
+const DEFAULT_DEACTIVATE_TIMEOUT_MS = 3_000;
 
 interface MpvClientEvents {
   on: (event: PluginMpvEventName, listener: (payload: unknown) => void) => void;
@@ -52,6 +54,8 @@ export interface PluginHostDeps<TUnstable> {
   /** Test seam; defaults to Node's `require`, which also loads synchronous ES modules. */
   loadModule?: (entryPath: string) => PluginModule;
   exec?: typeof execPluginCommand;
+  /** How long unload waits for each plugin's deactivate before disposing it anyway. */
+  deactivateTimeoutMs?: number;
 }
 
 interface LoadedPlugin {
@@ -349,14 +353,26 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
 
     async unloadAll(): Promise<void> {
       loadPromise = null;
+      const timeoutMs = deps.deactivateTimeoutMs ?? DEFAULT_DEACTIVATE_TIMEOUT_MS;
       await Promise.all(
         [...plugins.values()].map(async (plugin) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
           try {
-            await plugin.deactivate?.();
+            await Promise.race([
+              Promise.resolve().then(() => plugin.deactivate?.()),
+              new Promise<never>((_, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error(`timed out after ${timeoutMs} ms`)),
+                  timeoutMs,
+                );
+              }),
+            ]);
           } catch (error) {
             deps
               .createLogger(`plugin:${plugin.id}`)
               .error(`deactivate failed: ${errorMessage(error)}`);
+          } finally {
+            clearTimeout(timer);
           }
           disposePlugin(plugin);
         }),
