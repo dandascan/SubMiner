@@ -55,7 +55,7 @@ function createDeps(overrides: Partial<SessionActionExecutorDeps> = {}) {
     playNextSubtitle: () => calls.push('play-next'),
     cycleRuntimeOption: () => ({ ok: true }),
     playNextPlaylistItem: () => calls.push('playlist-next'),
-    runPluginAction: (pluginActionId) => {
+    runPluginAction: async (pluginActionId) => {
       calls.push(`plugin:${pluginActionId}`);
       return pluginActionId === 'ai-explain/explain';
     },

@@ -36,9 +36,9 @@ export function parsePluginManifest(
   };
 }
 
-/** Resolves the entry file, rejecting paths that leave the plugin directory. */
-export function resolvePluginEntryPath(pluginDir: string, main: string): string | null {
-  const resolved = path.resolve(pluginDir, main);
+/** Resolves a plugin file (entry, window HTML, preload), rejecting paths that leave the plugin directory. */
+export function resolvePluginFilePath(pluginDir: string, file: string): string | null {
+  const resolved = path.resolve(pluginDir, file);
   const relative = path.relative(pluginDir, resolved);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
     return null;

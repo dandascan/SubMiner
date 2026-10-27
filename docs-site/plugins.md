@@ -32,6 +32,8 @@ These are SubMiner app plugins. The Lua script that runs inside mpv is the separ
    }
    ```
 
+   To run an action from a script or a window-manager shortcut, use `subminer app --plugin-action ai-explain/explain`. It goes to the running SubMiner, or starts one if none is running.
+
 4. Restart SubMiner. Plugin changes apply on the next start; keybinding changes apply immediately.
 
 Load errors and plugin log output go to the app log with a `plugin:<id>` scope.
@@ -84,25 +86,31 @@ An error thrown by a plugin is logged and does not crash SubMiner. A plugin that
 
 ### `ctx` reference
 
-| Member                                 | What it does                                                                                            |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `id`, `dir`, `settings`                | Plugin id, plugin folder path, and `plugins.<id>.settings`                                              |
-| `log.debug/info/warn/error(message)`   | Write to the app log                                                                                    |
-| `every(ms, fn)`, `after(ms, fn)`       | Repeating and one-shot timers. Return a function that cancels them                                      |
-| `mpv.on(event, fn)`                    | Listen to mpv events (below). Returns an unsubscribe function                                           |
-| `mpv.command(args)`                    | Send an mpv command, e.g. `['set', 'pause', 'yes']`                                                     |
-| `mpv.getProperty(name)`                | Read an mpv property (Promise)                                                                          |
-| `mpv.connected`                        | Whether mpv is connected                                                                                |
-| `subtitles.current()`                  | The displayed line as `{ text, startTime, endTime }`, or `null`                                         |
-| `subtitles.context({ before, after })` | `{ current, before, after }`. Neighbors come from the loaded subtitle file, or recent lines for streams |
-| `actions.register(name, fn)`           | Add an action, bindable as `__plugin-action:<id>/<name>`                                                |
-| `notify(message, { variant })`         | Overlay notification. `variant` is `info`, `warning`, or `error`                                        |
-| `ui.panel({ title, markdown })`        | Open the plugin panel. Returns `{ update(content), close(), closed, signal }`                           |
-| `exec(command, args, options)`         | Run a program without a shell. Resolves `{ exitCode, stdout, stderr }`                                  |
-| `unstable`                             | SubMiner internals. These change between releases without notice                                        |
+| Member                                 | What it does                                                                                                              |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `id`, `dir`, `settings`                | Plugin id, plugin folder path, and `plugins.<id>.settings`                                                                |
+| `dataDir`                              | `plugin-data/<id>/` next to your config file, for caches and state. Exists before `activate` runs                         |
+| `log.debug/info/warn/error(message)`   | Write to the app log                                                                                                      |
+| `every(ms, fn)`, `after(ms, fn)`       | Repeating and one-shot timers. Return a function that cancels them                                                        |
+| `mpv.on(event, fn)`                    | Listen to mpv events (below). Returns an unsubscribe function                                                             |
+| `mpv.command(args)`                    | Send an mpv command, e.g. `['set', 'pause', 'yes']`                                                                       |
+| `mpv.getProperty(name)`                | Read an mpv property (Promise)                                                                                            |
+| `mpv.connected`                        | Whether mpv is connected                                                                                                  |
+| `mpv.ensureRunning()`                  | Connect to mpv, starting an idle mpv if none is running. Resolves `false` if that fails                                   |
+| `subtitles.current()`                  | The displayed line as `{ text, startTime, endTime }`, or `null`                                                           |
+| `subtitles.context({ before, after })` | `{ current, before, after }`. Neighbors come from the loaded subtitle file, or recent lines for streams                   |
+| `actions.register(name, fn)`           | Add an action, bindable as `__plugin-action:<id>/<name>`                                                                  |
+| `actions.run(actionId, payload)`       | Run a built-in action, the same ids keybindings use, e.g. `openJimaku` or `mineSentence`                                  |
+| `notify(message, { variant })`         | Overlay notification. `variant` is `info`, `warning`, or `error`                                                          |
+| `ui.panel({ title, markdown })`        | Open the plugin panel. Returns `{ update(content), close(), closed, signal }`                                             |
+| `ui.openWindow({ html, preload })`     | Open a window from the plugin folder (below). Returns the Electron `BrowserWindow`                                        |
+| `exec(command, args, options)`         | Run a program without a shell (Windows `.cmd`/`.bat` shims go through `cmd.exe`). Resolves `{ exitCode, stdout, stderr }` |
+| `unstable`                             | SubMiner internals. These change between releases without notice                                                          |
 
 A panel's `signal` aborts when the user closes it or another panel replaces it. Pass it to `exec` to stop work nobody will see. Only one panel is open at a time. Panel markdown supports headings, lists, quotes, code, bold, and italics; HTML is shown as plain text.
 
 `exec` options are `stdin`, `cwd`, `env`, `timeoutMs`, and `signal`. It resolves for any exit code and rejects when the program can't start, times out, or is aborted.
 
-mpv events: `connection-change`, `subtitle-change`, `subtitle-timing`, `time-pos-change`, `duration-change`, `pause-change`, `fullscreen-change`, `media-path-change`, `media-title-change`, `subtitle-track-change`, `subtitle-track-list-change`, `secondary-subtitle-change`, `secondary-subtitle-track-change`, `secondary-subtitle-delay-change`, `secondary-subtitle-visibility`, and `client-message`.
+`ui.openWindow` takes `html` and an optional `preload`, both relative to the plugin folder, plus `title`, `width`, and `height`. Opening the same `html` again focuses the open window. The page runs with context isolation and no Node access. The preload is sandboxed too: it can `require('electron')` but nothing else, so bundle anything more into it. Expose what the page needs from the preload with `contextBridge`, and handle its messages with `ipcMain` from `require('electron')` in the plugin. Prefix channel names with the plugin id. Plugin windows close when SubMiner quits.
+
+mpv events: `connection-change`, `subtitle-change`, `subtitle-timing`, `time-pos-change`, `duration-change`, `pause-change`, `fullscreen-change`, `media-path-change`, `media-title-change`, `subtitle-track-change`, `subtitle-track-list-change`, `secondary-subtitle-change`, `secondary-subtitle-track-change`, `secondary-subtitle-delay-change`, `secondary-subtitle-visibility`, `client-message`, and `end-file`. `end-file` gives `{ reason, playlistEntryId, error }`, where `reason` is `eof`, `stop`, `quit`, `error`, `redirect`, or `unknown`.

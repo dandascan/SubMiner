@@ -1,3 +1,6 @@
+import type { BrowserWindow } from 'electron';
+
+import type { SessionActionId, SessionActionPayload } from '../../../types/session-bindings';
 import type { MpvIpcClientEventMap } from '../mpv';
 
 /** `plugin.json` at the root of a plugin directory. */
@@ -36,6 +39,7 @@ export const PLUGIN_MPV_EVENT_NAMES = [
   'media-title-change',
   'secondary-subtitle-visibility',
   'client-message',
+  'end-file',
 ] as const satisfies readonly PluginMpvEventName[];
 
 export interface PluginSubtitleLine {
@@ -64,6 +68,28 @@ export interface PluginPanelHandle {
   readonly closed: boolean;
   update: (content: Partial<PluginPanelContent>) => void;
   close: () => void;
+}
+
+export interface PluginWindowOptions {
+  /** HTML file to load, relative to the plugin directory. */
+  html: string;
+  /** Preload script, relative to the plugin directory. Runs with context isolation. */
+  preload?: string;
+  /** Window title; Hyprland matches it to float the window above the overlay. */
+  title?: string;
+  width?: number;
+  height?: number;
+}
+
+/** What the host needs to show a plugin window; paths are absolute and already validated. */
+export interface PluginWindowRequest {
+  /** Same key, same window: reopening focuses the existing one. */
+  key: string;
+  htmlPath: string;
+  preloadPath: string | null;
+  title: string;
+  width: number;
+  height: number;
 }
 
 export interface PluginExecOptions {
@@ -103,6 +129,11 @@ export interface PluginContext<TUnstable = unknown> {
   readonly dir: string;
   /** `plugins.<id>.settings` from config. */
   readonly settings: Readonly<Record<string, unknown>>;
+  /**
+   * `<config dir>/plugin-data/<id>/` for caches and state. Kept apart from `dir`, so replacing the
+   * plugin folder keeps its data. Created before `activate`.
+   */
+  readonly dataDir: string;
   readonly log: PluginLogger;
   /** Repeating timer; cleared automatically when the plugin unloads. */
   every: (intervalMs: number, callback: () => unknown) => Disposer;
@@ -116,6 +147,8 @@ export interface PluginContext<TUnstable = unknown> {
     ) => Disposer;
     command: (command: (string | number)[]) => void;
     getProperty: (name: string) => Promise<unknown>;
+    /** Connects to mpv, launching an idle mpv if none is running. Resolves false when that fails. */
+    ensureRunning: () => Promise<boolean>;
   };
   readonly subtitles: {
     current: () => PluginSubtitleLine | null;
@@ -124,11 +157,18 @@ export interface PluginContext<TUnstable = unknown> {
   readonly actions: {
     /** Bind with `["__plugin-action:<plugin id>/<name>"]` in `keybindings`. */
     register: (name: string, handler: () => unknown) => Disposer;
+    /** Runs a built-in session action, the same ones keybindings use (e.g. `openJimaku`). */
+    run: (actionId: SessionActionId, payload?: SessionActionPayload) => Promise<void>;
   };
   notify: (message: string, options?: { variant?: PluginNotifyVariant }) => void;
   readonly ui: {
     /** Opens the shared plugin panel, replacing any panel that is already open. */
     panel: (content: Partial<PluginPanelContent> & { markdown: string }) => PluginPanelHandle;
+    /**
+     * Opens a window for this plugin, or focuses it if the same `html` is already open.
+     * The window is destroyed when the plugin unloads.
+     */
+    openWindow: (options: PluginWindowOptions) => BrowserWindow;
   };
   /** Runs a binary without a shell, with the AppImage library path removed from its environment. */
   exec: (command: string, args: string[], options?: PluginExecOptions) => Promise<PluginExecResult>;

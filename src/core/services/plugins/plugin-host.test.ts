@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+import type { BrowserWindow } from 'electron';
+
+import type { SessionActionDispatchRequest } from '../../../types/runtime';
 import { createPluginHost, type PluginHostDeps } from './plugin-host';
-import type { PluginConfigEntry, PluginLogger, PluginMpvEventName } from './types';
+import type {
+  PluginConfigEntry,
+  PluginLogger,
+  PluginMpvEventName,
+  PluginWindowRequest,
+} from './types';
 
 function writePlugin(root: string, id: string, files: Record<string, string>): void {
   const dir = path.join(root, id);
@@ -16,10 +24,31 @@ function writePlugin(root: string, id: string, files: Record<string, string>): v
   }
 }
 
+type FakeWindow = ReturnType<typeof createFakeWindow>;
+
+/** The slice of BrowserWindow the host touches: destroy, isDestroyed, and the `closed` event. */
+function createFakeWindow() {
+  const events = new EventEmitter();
+  const fake = {
+    destroyed: false,
+    isDestroyed: () => fake.destroyed,
+    destroy: () => {
+      fake.destroyed = true;
+      events.emit('closed');
+    },
+    once: (event: string, listener: () => void) => events.once(event, listener),
+    asWindow: () => fake as unknown as BrowserWindow,
+  };
+  return fake;
+}
+
 function createHarness(config: Record<string, PluginConfigEntry>) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'subminer-plugins-'));
   const errors: string[] = [];
   const notifications: string[] = [];
+  const sessionActions: SessionActionDispatchRequest[] = [];
+  const windowRequests: PluginWindowRequest[] = [];
+  const windows = new Map<string, FakeWindow>();
   const logger: PluginLogger = {
     debug: () => {},
     info: () => {},
@@ -27,24 +56,41 @@ function createHarness(config: Record<string, PluginConfigEntry>) {
     error: (message) => errors.push(message),
   };
   const deps: PluginHostDeps<{ marker: string }> = {
-    pluginsDir: root,
+    pluginsDir: path.join(root, 'plugins'),
+    pluginDataDir: path.join(root, 'data'),
     getPluginConfig: () => config,
     createLogger: () => logger,
     isMpvConnected: () => true,
     sendMpvCommand: () => {},
     requestMpvProperty: async () => null,
+    ensureMpvRunning: async () => true,
+    dispatchSessionAction: async (request) => {
+      sessionActions.push(request);
+    },
     getCurrentSubtitle: () => null,
     getSubtitleContext: () => ({ current: null, before: [], after: [] }),
     notify: (message) => notifications.push(message),
     openPanel: () => {
       throw new Error('not used');
     },
+    openWindow: (request) => {
+      windowRequests.push(request);
+      const existing = windows.get(request.key);
+      if (existing && !existing.destroyed) return { window: existing.asWindow(), created: false };
+      const window = createFakeWindow();
+      windows.set(request.key, window);
+      return { window: window.asWindow(), created: true };
+    },
     unstable: { marker: 'internals' },
   };
   return {
-    root,
+    root: deps.pluginsDir,
+    dataRoot: deps.pluginDataDir,
     errors,
     notifications,
+    sessionActions,
+    windowRequests,
+    windows,
     host: createPluginHost(deps),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
@@ -85,9 +131,9 @@ test('loads enabled plugins and runs their registered actions', async () => {
 
     await h.host.loadAll();
 
-    assert.equal(h.host.runAction('greeter/say'), true);
+    assert.equal(await h.host.runAction('greeter/say'), true);
     assert.deepEqual(h.notifications, ['hi internals']);
-    assert.equal(h.host.runAction('greeter/missing'), false);
+    assert.equal(await h.host.runAction('greeter/missing'), false);
     assert.deepEqual(h.errors, []);
   } finally {
     h.cleanup();
@@ -104,7 +150,7 @@ test('loads ES module plugins', async () => {
 
     await h.host.loadAll();
 
-    assert.equal(h.host.runAction('esm/go'), true);
+    assert.equal(await h.host.runAction('esm/go'), true);
     assert.deepEqual(h.notifications, ['esm']);
   } finally {
     h.cleanup();
@@ -128,8 +174,8 @@ test('a failed activation rolls back its registrations without affecting other p
 
     await h.host.loadAll();
 
-    assert.equal(h.host.runAction('broken/half'), false);
-    assert.equal(h.host.runAction('healthy/ok'), true);
+    assert.equal(await h.host.runAction('broken/half'), false);
+    assert.equal(await h.host.runAction('healthy/ok'), true);
     assert.deepEqual(h.errors, ['Activation failed: boom']);
   } finally {
     h.cleanup();
@@ -200,6 +246,108 @@ test('events follow a replacement mpv client', async () => {
     second.emit('media-path-change', { path: 'current.mkv' });
 
     assert.deepEqual(h.notifications, ['current.mkv']);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runAction waits for a load that is still in progress', async () => {
+  const h = createHarness({ slow: enabled() });
+  try {
+    writePlugin(h.root, 'slow', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = async (ctx) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ctx.actions.register('go', () => ctx.notify('went'));
+      };`,
+    });
+
+    void h.host.loadAll();
+
+    assert.equal(await h.host.runAction('slow/go'), true);
+    assert.deepEqual(h.notifications, ['went']);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('each plugin gets its own data folder, created before activate', async () => {
+  const h = createHarness({ keeper: enabled() });
+  try {
+    writePlugin(h.root, 'keeper', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `const fs = require('node:fs');
+      exports.activate = (ctx) => {
+        fs.writeFileSync(require('node:path').join(ctx.dataDir, 'state.json'), '{}');
+        ctx.notify(ctx.dataDir);
+      };`,
+    });
+
+    await h.host.loadAll();
+
+    const expected = path.join(h.dataRoot, 'keeper');
+    assert.deepEqual(h.notifications, [expected]);
+    assert.equal(existsSync(path.join(expected, 'state.json')), true);
+    assert.deepEqual(h.errors, []);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('actions.run forwards built-in session actions', async () => {
+  const h = createHarness({ caller: enabled() });
+  try {
+    writePlugin(h.root, 'caller', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = async (ctx) => {
+        await ctx.actions.run('openJimaku');
+        await ctx.actions.run('cycleRuntimeOption', { runtimeOptionId: 'x', direction: -1 });
+      };`,
+    });
+
+    await h.host.loadAll();
+
+    assert.deepEqual(h.sessionActions, [
+      { actionId: 'openJimaku' },
+      { actionId: 'cycleRuntimeOption', payload: { runtimeOptionId: 'x', direction: -1 } },
+    ]);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('openWindow resolves plugin files, reuses open windows, and closes them on unload', async () => {
+  const h = createHarness({ viewer: enabled() });
+  try {
+    writePlugin(h.root, 'viewer', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = (ctx) => {
+        ctx.actions.register('open', () => ctx.ui.openWindow({ html: 'ui/index.html', preload: 'preload.js', width: 400 }));
+        ctx.actions.register('escape', () => ctx.ui.openWindow({ html: '../other/index.html' }));
+      };`,
+    });
+    await h.host.loadAll();
+
+    await h.host.runAction('viewer/open');
+    await h.host.runAction('viewer/open');
+    const dir = path.join(h.root, 'viewer');
+    assert.deepEqual(h.windowRequests[0], {
+      key: `viewer:${path.join(dir, 'ui', 'index.html')}`,
+      htmlPath: path.join(dir, 'ui', 'index.html'),
+      preloadPath: path.join(dir, 'preload.js'),
+      title: 'viewer',
+      width: 400,
+      height: 720,
+    });
+    assert.equal(h.windows.size, 1);
+
+    await h.host.runAction('viewer/escape');
+    assert.equal(h.windowRequests.length, 2);
+    assert.match(h.errors[0] ?? '', /must stay inside/);
+
+    const [window] = [...h.windows.values()];
+    await h.host.unloadAll();
+    assert.equal(window?.destroyed, true);
   } finally {
     h.cleanup();
   }

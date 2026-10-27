@@ -1,6 +1,11 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 
 import { buildSystemBinaryEnv } from '../../utils/system-binary-env';
+import {
+  buildWindowsShimInvocation,
+  isWindowsCommandShim,
+  resolveWindowsCommand,
+} from '../../utils/windows-command-shim';
 import type { PluginExecOptions, PluginExecResult } from './types';
 
 const MAX_CAPTURED_OUTPUT_CHARS = 4 * 1024 * 1024;
@@ -11,10 +16,42 @@ function appendCapped(current: string, chunk: string): string {
   return (current + chunk).slice(0, MAX_CAPTURED_OUTPUT_CHARS);
 }
 
+interface SpawnTarget {
+  file: string;
+  args: string[];
+  viaShell: boolean;
+}
+
 /**
- * Runs `command` without a shell and collects its output. Resolves with the exit code on any exit,
+ * Windows batch shims (npm installs `codex` as `codex.cmd`) only run through cmd.exe. Native
+ * binaries, and every command on Linux and macOS, are spawned directly.
+ */
+export function resolvePluginSpawnTarget(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): SpawnTarget {
+  if (platform !== 'win32') return { file: command, args, viaShell: false };
+  const resolved = resolveWindowsCommand(command, env);
+  if (!isWindowsCommandShim(resolved)) return { file: resolved, args, viaShell: false };
+  return { ...buildWindowsShimInvocation(resolved, args, env), viaShell: true };
+}
+
+// Killing cmd.exe alone would leave the shim's own child running, so end the whole tree.
+function killWindowsProcessTree(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  }).on('error', () => child.kill());
+}
+
+/**
+ * Runs `command` (no shell, except cmd.exe for Windows batch shims) and collects its output. Resolves with the exit code on any exit,
  * including non-zero; rejects when the binary cannot start, the timeout passes, or `signal` aborts.
- * A timed-out or aborted child gets SIGTERM, then SIGKILL after `killGraceMs`.
+ * A timed-out or aborted child gets SIGTERM, then SIGKILL after `killGraceMs` (a shim's
+ * process tree is ended with taskkill instead).
  */
 export function execPluginCommand(
   command: string,
@@ -28,11 +65,14 @@ export function execPluginCommand(
       return;
     }
 
-    const child = spawn(command, args, {
+    const env = { ...buildSystemBinaryEnv(), ...options.env };
+    const target = resolvePluginSpawnTarget(command, args, env);
+    const child = spawn(target.file, target.args, {
       cwd: options.cwd,
-      env: { ...buildSystemBinaryEnv(), ...options.env },
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      windowsVerbatimArguments: target.viaShell,
     });
 
     let stdout = '';
@@ -51,6 +91,10 @@ export function execPluginCommand(
     // Rejects right away, then escalates to SIGKILL if the child ignores SIGTERM.
     const killWith = (error: Error): void => {
       settle(() => reject(error));
+      if (target.viaShell) {
+        killWindowsProcessTree(child);
+        return;
+      }
       child.kill('SIGTERM');
       const forceKill = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');

@@ -2,8 +2,11 @@ import { EventEmitter } from 'node:events';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import type { BrowserWindow } from 'electron';
+
+import type { SessionActionDispatchRequest } from '../../../types/runtime';
 import { execPluginCommand } from './exec';
-import { isValidPluginName, parsePluginManifest, resolvePluginEntryPath } from './manifest';
+import { isValidPluginName, parsePluginManifest, resolvePluginFilePath } from './manifest';
 import {
   PLUGIN_MPV_EVENT_NAMES,
   type PluginConfigEntry,
@@ -16,9 +19,12 @@ import {
   type PluginPanelHandle,
   type PluginSubtitleContext,
   type PluginSubtitleLine,
+  type PluginWindowRequest,
 } from './types';
 
 const MIN_TIMER_INTERVAL_MS = 100;
+const DEFAULT_WINDOW_WIDTH = 960;
+const DEFAULT_WINDOW_HEIGHT = 720;
 
 interface MpvClientEvents {
   on: (event: PluginMpvEventName, listener: (payload: unknown) => void) => void;
@@ -27,15 +33,21 @@ interface MpvClientEvents {
 
 export interface PluginHostDeps<TUnstable> {
   pluginsDir: string;
+  /** Root of the per-plugin data folders; each plugin gets `<pluginDataDir>/<id>`. */
+  pluginDataDir: string;
   getPluginConfig: () => Record<string, PluginConfigEntry>;
   createLogger: (scope: string) => PluginLogger;
   isMpvConnected: () => boolean;
   sendMpvCommand: (command: (string | number)[]) => void;
   requestMpvProperty: (name: string) => Promise<unknown>;
+  ensureMpvRunning: () => Promise<boolean>;
+  dispatchSessionAction: (request: SessionActionDispatchRequest) => Promise<void>;
   getCurrentSubtitle: () => PluginSubtitleLine | null;
   getSubtitleContext: (options: { before?: number; after?: number }) => PluginSubtitleContext;
   notify: (message: string, variant: PluginNotifyVariant) => void;
   openPanel: (content: PluginPanelContent) => PluginPanelHandle;
+  /** Focuses the window already open under `request.key`, or creates it (`created: true`). */
+  openWindow: (request: PluginWindowRequest) => { window: BrowserWindow; created: boolean };
   unstable: TUnstable;
   /** Test seam; defaults to Node's `require`, which also loads synchronous ES modules. */
   loadModule?: (entryPath: string) => PluginModule;
@@ -106,6 +118,7 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
   function createContext(
     plugin: LoadedPlugin,
     dir: string,
+    dataDir: string,
     entry: PluginConfigEntry,
     log: PluginLogger,
   ): PluginContext<TUnstable> {
@@ -125,6 +138,7 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
       id: plugin.id,
       dir,
       settings: Object.freeze({ ...entry.settings }),
+      dataDir,
       log,
       every: (intervalMs, callback) => {
         const handle = setInterval(
@@ -158,6 +172,7 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
         },
         command: (command) => deps.sendMpvCommand(command),
         getProperty: (name) => deps.requestMpvProperty(name),
+        ensureRunning: () => deps.ensureMpvRunning(),
       },
       subtitles: {
         current: () => deps.getCurrentSubtitle(),
@@ -175,6 +190,8 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
           actions.set(actionId, { pluginId: plugin.id, handler });
           return track(() => actions.delete(actionId));
         },
+        run: (actionId, payload) =>
+          deps.dispatchSessionAction(payload === undefined ? { actionId } : { actionId, payload }),
       },
       notify: (message, options) => deps.notify(message, options?.variant ?? 'info'),
       ui: {
@@ -186,6 +203,34 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
           const dispose = track(() => handle.close());
           handle.signal.addEventListener('abort', dispose, { once: true });
           return handle;
+        },
+        openWindow: (options) => {
+          const resolveFile = (label: string, file: string): string => {
+            const resolved = resolvePluginFilePath(dir, file);
+            if (!resolved) throw new Error(`Window ${label} "${file}" must stay inside ${dir}.`);
+            return resolved;
+          };
+          const htmlPath = resolveFile('html', options.html);
+          const { window, created } = deps.openWindow({
+            key: `${plugin.id}:${htmlPath}`,
+            htmlPath,
+            preloadPath:
+              options.preload === undefined ? null : resolveFile('preload', options.preload),
+            title: options.title ?? plugin.id,
+            width: options.width ?? DEFAULT_WINDOW_WIDTH,
+            height: options.height ?? DEFAULT_WINDOW_HEIGHT,
+          });
+          if (created) {
+            let closed = false;
+            const dispose = track(() => {
+              if (!closed && !window.isDestroyed()) window.destroy();
+            });
+            window.once('closed', () => {
+              closed = true;
+              dispose();
+            });
+          }
+          return window;
         },
       },
       exec: (command, args, options = {}) =>
@@ -231,9 +276,17 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
       log.error(parsed.error);
       return;
     }
-    const entryPath = resolvePluginEntryPath(dir, parsed.manifest.main);
+    const entryPath = resolvePluginFilePath(dir, parsed.manifest.main);
     if (!entryPath) {
       log.error(`Entry "${parsed.manifest.main}" must stay inside ${dir}.`);
+      return;
+    }
+
+    const dataDir = path.join(deps.pluginDataDir, id);
+    try {
+      await fs.mkdir(dataDir, { recursive: true });
+    } catch (error) {
+      log.error(`Cannot create data folder ${dataDir}: ${errorMessage(error)}`);
       return;
     }
 
@@ -250,7 +303,9 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
       if (!activate) {
         throw new Error(`${parsed.manifest.main} does not export an activate(ctx) function.`);
       }
-      const returned = await activate(createContext(plugin, dir, entry, log) as PluginContext);
+      const returned = await activate(
+        createContext(plugin, dir, dataDir, entry, log) as PluginContext,
+      );
       plugin.deactivate =
         typeof returned === 'function'
           ? (returned as () => unknown)
@@ -308,8 +363,12 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
       );
     },
 
-    /** Runs a registered `<plugin id>/<name>` action. Returns false when none is registered. */
-    runAction(actionId: string): boolean {
+    /**
+     * Runs a registered `<plugin id>/<name>` action, waiting for an in-progress load first so a
+     * command sent at startup is not lost. Resolves false when no plugin registered the action.
+     */
+    async runAction(actionId: string): Promise<boolean> {
+      await loadPromise;
       const action = actions.get(actionId);
       if (!action) return false;
       runGuarded(

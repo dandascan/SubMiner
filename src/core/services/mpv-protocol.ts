@@ -9,7 +9,29 @@ export type MpvMessage = {
   args?: unknown;
   request_id?: number;
   error?: string;
+  reason?: unknown;
+  playlist_entry_id?: unknown;
+  file_error?: unknown;
 };
+
+const MPV_END_FILE_REASONS = ['eof', 'stop', 'quit', 'error', 'redirect'] as const;
+export type MpvEndFileReason = (typeof MPV_END_FILE_REASONS)[number] | 'unknown';
+
+/** mpv's `end-file` event: why the current file stopped, and mpv's error text when it failed. */
+export interface MpvEndFileEvent {
+  reason: MpvEndFileReason;
+  playlistEntryId: number | null;
+  error: string | null;
+}
+
+function parseEndFileEvent(msg: MpvMessage): MpvEndFileEvent {
+  const reason = MPV_END_FILE_REASONS.find((known) => known === msg.reason) ?? 'unknown';
+  return {
+    reason,
+    playlistEntryId: typeof msg.playlist_entry_id === 'number' ? msg.playlist_entry_id : null,
+    error: typeof msg.file_error === 'string' && msg.file_error ? msg.file_error : null,
+  };
+}
 
 export const MPV_REQUEST_ID_SUBTEXT = 101;
 export const MPV_REQUEST_ID_PATH = 102;
@@ -100,6 +122,7 @@ export interface MpvProtocolHandleMessageDeps {
   shouldQuitOnMpvShutdown: () => boolean;
   requestAppQuit: () => void;
   emitClientMessage?: (payload: { args: string[] }) => void;
+  emitEndFile?: (payload: MpvEndFileEvent) => void;
 }
 
 type SubtitleTrackCandidate = {
@@ -419,6 +442,8 @@ export async function dispatchMpvProtocolMessage(
     if (args.length > 0) {
       deps.emitClientMessage?.({ args });
     }
+  } else if (msg.event === 'end-file') {
+    deps.emitEndFile?.(parseEndFileEvent(msg));
   } else if (msg.event === 'shutdown') {
     deps.restorePreviousSecondarySubVisibility();
     if (deps.shouldQuitOnMpvShutdown()) {

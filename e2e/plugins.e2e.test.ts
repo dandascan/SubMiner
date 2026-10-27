@@ -14,7 +14,14 @@ const TEST_TIMEOUT_MS = 120_000;
 // Opens a panel describing the subtitle context and a child process result, and
 // logs when the panel's signal aborts so the test can see the close reach main.
 const PROBE_PLUGIN = `
+const { ipcMain } = require('electron');
+
 exports.activate = (ctx) => {
+  ipcMain.handle('e2e-probe:info', () => ({ dataDir: ctx.dataDir, greeting: ctx.settings.greeting }));
+  ctx.actions.register('window', () => {
+    ctx.ui.openWindow({ html: 'ui/index.html', preload: 'preload.js', title: 'E2E Probe Window' });
+  });
+  ctx.mpv.on('end-file', ({ reason }) => ctx.log.info('probe end-file ' + reason));
   ctx.actions.register('show', () => {
     const { before, current, after } = ctx.subtitles.context({ before: 1, after: 1 });
     const panel = ctx.ui.panel({ title: 'Probe', markdown: '_working_' });
@@ -38,7 +45,27 @@ exports.activate = (ctx) => {
       )
       .catch((error) => panel.update({ markdown: 'exec failed: ' + error.message }));
   });
+  return () => ipcMain.removeHandler('e2e-probe:info');
 };
+`;
+
+const PROBE_PRELOAD = `
+const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('probe', { info: () => ipcRenderer.invoke('e2e-probe:info') });
+`;
+
+const PROBE_WINDOW_HTML = `<!doctype html>
+<html>
+  <head><title>E2E Probe Window</title></head>
+  <body>
+    <pre id="out">loading</pre>
+    <script>
+      window.probe.info().then((info) => {
+        document.getElementById('out').textContent = JSON.stringify(info);
+      });
+    </script>
+  </body>
+</html>
 `;
 
 type Started = { session: E2eSession; overlay: CdpPage };
@@ -51,6 +78,8 @@ function useSession(): Promise<Started> {
       files: {
         'plugins/e2e-probe/plugin.json': JSON.stringify({ name: 'E2E Probe', main: 'main.cjs' }),
         'plugins/e2e-probe/main.cjs': PROBE_PLUGIN,
+        'plugins/e2e-probe/preload.js': PROBE_PRELOAD,
+        'plugins/e2e-probe/ui/index.html': PROBE_WINDOW_HTML,
       },
     });
     try {
@@ -148,3 +177,41 @@ test(
     );
   },
 );
+
+test(
+  'a CLI plugin action opens a plugin window whose preload talks to the plugin',
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const { session } = await useSession();
+
+    await session.runAppCommand('--plugin-action', 'e2e-probe/window');
+
+    const page = await session.openPage('plugins/e2e-probe/ui/index.html');
+    const info = await page.waitFor<{ dataDir: string; greeting: string } | false>(
+      `(() => {
+        const text = document.getElementById('out')?.textContent;
+        return text && text !== 'loading' ? JSON.parse(text) : false;
+      })()`,
+      { description: 'plugin window to read plugin info over IPC' },
+    );
+
+    assert.equal(info.greeting, 'hello');
+    assert.equal(path.basename(info.dataDir), 'e2e-probe');
+    assert.equal(path.basename(path.dirname(info.dataDir)), 'plugin-data');
+    assert.equal(fs.statSync(info.dataDir).isDirectory(), true);
+  },
+);
+
+test('plugins receive mpv end-file events', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const { session } = await useSession();
+  const mediaPath = await session.mpv.command('get_property', 'path');
+
+  // Replacing the playing file ends it with reason "stop".
+  await session.mpv.command('loadfile', String(mediaPath), 'replace');
+
+  await waitUntil(
+    () =>
+      fs.readFileSync(path.join(session.root, 'app.log'), 'utf8').includes('probe end-file stop'),
+    { description: 'the plugin to log the end-file reason' },
+  );
+});

@@ -519,6 +519,7 @@ import {
   createPluginPanelRuntime,
   openPluginPanelModal,
 } from './main/runtime/plugin-panel-runtime';
+import { createPluginWindowRuntime } from './main/runtime/plugin-window-runtime';
 import { openCharacterDictionaryManagerModal as openCharacterDictionaryManagerModalRuntime } from './main/runtime/character-dictionary-open';
 import { openControllerSelectModal as openControllerSelectModalRuntime } from './main/runtime/controller-select-open';
 import { openControllerDebugModal as openControllerDebugModalRuntime } from './main/runtime/controller-debug-open';
@@ -3128,8 +3129,15 @@ function getPluginCurrentSubtitle(): PluginSubtitleLine | null {
   };
 }
 
+const pluginWindowRuntime = createPluginWindowRuntime({
+  createBrowserWindow: (options) => new BrowserWindow(options),
+  promoteAboveOverlay: (window) => promoteSettingsWindowAboveOverlay(window),
+  logError: (message) => logger.error(message),
+});
+
 const pluginHost = createPluginHost({
   pluginsDir: path.join(CONFIG_DIR, 'plugins'),
+  pluginDataDir: path.join(USER_DATA_PATH, 'plugin-data'),
   getPluginConfig: () => configService.getConfig().plugins,
   createLogger,
   isMpvConnected: () => appState.mpvClient?.connected === true,
@@ -3138,6 +3146,8 @@ const pluginHost = createPluginHost({
     if (!appState.mpvClient) throw new Error('mpv is not connected.');
     return await appState.mpvClient.requestProperty(name);
   },
+  ensureMpvRunning: () => ensureMpvConnectedForPlayback(),
+  dispatchSessionAction: (request) => dispatchSessionAction(request),
   getCurrentSubtitle: () => getPluginCurrentSubtitle(),
   getSubtitleContext: (options) =>
     buildPluginSubtitleContext({
@@ -3153,6 +3163,7 @@ const pluginHost = createPluginHost({
   notify: (message, variant) =>
     overlayNotificationsRuntime.showConfiguredStatusNotification(message, { variant }),
   openPanel: (content) => pluginPanelRuntime.open(content),
+  openWindow: (request) => pluginWindowRuntime.open(request),
   unstable: { appState, configService, overlayManager },
 });
 
@@ -5942,7 +5953,11 @@ async function dispatchSessionAction(request: SessionActionDispatchRequest): Pro
     },
     playNextPlaylistItem: () =>
       sendMpvCommandRuntime(appState.mpvClient, ['playlist-next', 'force']),
-    runPluginAction: (pluginActionId) => pluginHost.runAction(pluginActionId),
+    runPluginAction: async (pluginActionId) => {
+      const ran = await pluginHost.runAction(pluginActionId);
+      if (!ran) logger.warn(`Plugin action is not registered: ${pluginActionId}`);
+      return ran;
+    },
     showMpvOsd: (text) => showConfiguredPlaybackFeedback(text),
   });
 }

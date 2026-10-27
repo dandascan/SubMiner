@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-import { execPluginCommand } from './exec';
+import { execPluginCommand, resolvePluginSpawnTarget } from './exec';
 
 // The test runtime (bun or node) doubles as a portable child process.
 const runtime = process.execPath;
@@ -106,4 +106,32 @@ test('rejects when the binary does not exist', async () => {
     execPluginCommand('subminer-definitely-missing-binary', []),
     (error: NodeJS.ErrnoException) => error.code === 'ENOENT',
   );
+});
+
+test('Windows batch shims run through cmd.exe; other commands spawn directly', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'plugin-exec-shim-'));
+  try {
+    await writeFile(path.join(dir, 'codex.cmd'), '');
+    await writeFile(path.join(dir, 'native.exe'), '');
+    const env = { PATH: dir, PATHEXT: '.exe;.cmd', ComSpec: 'cmd.exe' };
+
+    const shim = resolvePluginSpawnTarget('codex', ['exec', '-'], env, 'win32');
+    assert.equal(shim.viaShell, true);
+    assert.equal(shim.file, 'cmd.exe');
+    assert.deepEqual(shim.args.slice(0, 4), ['/d', '/s', '/v:off', '/c']);
+    assert.ok(shim.args[4]!.includes(path.join(dir, 'codex.cmd')));
+
+    assert.deepEqual(resolvePluginSpawnTarget('native', ['-v'], env, 'win32'), {
+      file: path.join(dir, 'native.exe'),
+      args: ['-v'],
+      viaShell: false,
+    });
+    assert.deepEqual(resolvePluginSpawnTarget('codex', ['-'], env, 'linux'), {
+      file: 'codex',
+      args: ['-'],
+      viaShell: false,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
