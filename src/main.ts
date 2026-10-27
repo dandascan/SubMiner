@@ -6040,11 +6040,16 @@ const { registerIpcRuntimeHandlers } = composeIpcRuntimeHandlers({
         }
       },
       onOverlayModalClosed: (modal, senderWindow, instanceId) => {
+        // A late close for a replaced plugin panel must not hide the panel now showing.
+        if (
+          modal === 'plugin-panel' &&
+          instanceId !== undefined &&
+          !pluginPanelRuntime.handleModalClosed(instanceId)
+        ) {
+          return;
+        }
         if (modal === 'media-timing-review') {
           void mediaTimingReviewRuntime.dispose();
-        }
-        if (modal === 'plugin-panel' && instanceId !== undefined) {
-          pluginPanelRuntime.handleModalClosed(instanceId);
         }
         if (modal === 'subtitle-sidebar' && senderWindow === overlayManager.getMainWindow()) {
           subtitleSidebarRequestedOpen = false;

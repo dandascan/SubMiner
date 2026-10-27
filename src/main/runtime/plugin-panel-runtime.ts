@@ -103,9 +103,15 @@ export function createPluginPanelRuntime(deps: {
       };
     },
 
-    /** The overlay closed `panelId`; a late notice for an already replaced panel is ignored. */
-    handleModalClosed(panelId: number): void {
-      if (active?.panelId === panelId) finish(active);
+    /**
+     * The overlay closed `panelId`. Returns false for a late notice about a panel that a newer one
+     * already replaced, so the caller skips the modal teardown that would hide the newer panel.
+     */
+    handleModalClosed(panelId: number): boolean {
+      if (!active) return true;
+      if (active.panelId !== panelId) return false;
+      finish(active);
+      return true;
     },
   };
 }
