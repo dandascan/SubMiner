@@ -1,8 +1,8 @@
 // Sends the current subtitle line, with a few lines of context, to `codex exec` and shows the
 // answer in the SubMiner plugin panel. Registers two actions: `explain` and `translate`.
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+const { mkdtemp, readFile, rm } = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
 
 const DEFAULT_SETTINGS = {
   codexPath: 'codex',
@@ -32,7 +32,7 @@ const ACTIONS = {
   },
 };
 
-export function activate(ctx) {
+function activate(ctx) {
   const settings = { ...DEFAULT_SETTINGS, ...ctx.settings };
   for (const [name, action] of Object.entries(ACTIONS)) {
     const prompt = settings.prompts?.[name] ?? action.prompt;
@@ -49,7 +49,11 @@ function quote(text) {
 
 // Subtitles wrap across lines; flatten each cue so the >>> marker covers all of it.
 function oneLine(text) {
-  return text.split('\n').map((part) => part.trim()).filter(Boolean).join(' ');
+  return text
+    .split('\n')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(' ');
 }
 
 function tail(text, lineCount) {
@@ -126,3 +130,5 @@ async function ask(ctx, settings, title, instructions) {
     await rm(workDir, { recursive: true, force: true });
   }
 }
+
+module.exports = { activate };

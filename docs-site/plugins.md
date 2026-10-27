@@ -38,7 +38,7 @@ Load errors and plugin log output go to the app log with a `plugin:<id>` scope.
 
 ## Example: explain the current line with Codex
 
-The repository ships [`examples/plugins/ai-explain`](https://github.com/ksyasuda/SubMiner/tree/main/examples/plugins/ai-explain). It sends the current line, plus the lines around it, to [`codex exec`](https://github.com/openai/codex) and shows the answer in a panel. It needs a logged-in Codex CLI.
+The repository ships [`assets/plugins/ai-explain`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/ai-explain). It sends the current line, plus the lines around it, to [`codex exec`](https://github.com/openai/codex) and shows the answer in a panel. It needs a logged-in Codex CLI.
 
 | Action      | What it does                                                    |
 | ----------- | --------------------------------------------------------------- |
@@ -62,13 +62,13 @@ Press `Esc` to close the panel. Closing it, or starting another request, stops t
 A plugin folder needs a `plugin.json`:
 
 ```json
-{ "name": "My Plugin", "version": "1.0.0", "main": "main.mjs" }
+{ "name": "My Plugin", "version": "1.0.0", "main": "main.js" }
 ```
 
-`main` points to a CommonJS or ES module that exports `activate(ctx)`. It may return a cleanup function, or the module can export `deactivate()`. Everything a plugin registers through `ctx` (listeners, timers, actions, panels, running programs) is cleaned up automatically when SubMiner quits.
+`main` points to a CommonJS module (`.js`) or an ES module (`.mjs`) that exports `activate(ctx)`. It may return a cleanup function, or the module can export `deactivate()`. Everything a plugin registers through `ctx` (listeners, timers, actions, panels, running programs) is cleaned up automatically when SubMiner quits.
 
 ```js
-export function activate(ctx) {
+function activate(ctx) {
   ctx.mpv.on('media-path-change', ({ path }) => ctx.log.info(`Now playing ${path}`));
   ctx.every(60_000, () => ctx.log.info('Still watching'));
   ctx.actions.register('hello', () => {
@@ -76,6 +76,8 @@ export function activate(ctx) {
     ctx.ui.panel({ title: 'Hello', markdown: line ? `> ${line.text}` : '_No subtitle_' });
   });
 }
+
+module.exports = { activate };
 ```
 
 An error thrown by a plugin is logged and does not crash SubMiner. A plugin that blocks with a long synchronous loop still freezes the app, so keep slow work asynchronous.

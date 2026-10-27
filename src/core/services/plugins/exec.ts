@@ -4,6 +4,7 @@ import { buildSystemBinaryEnv } from '../../utils/system-binary-env';
 import type { PluginExecOptions, PluginExecResult } from './types';
 
 const MAX_CAPTURED_OUTPUT_CHARS = 4 * 1024 * 1024;
+const DEFAULT_KILL_GRACE_MS = 3_000;
 
 function appendCapped(current: string, chunk: string): string {
   if (current.length >= MAX_CAPTURED_OUTPUT_CHARS) return current;
@@ -13,11 +14,13 @@ function appendCapped(current: string, chunk: string): string {
 /**
  * Runs `command` without a shell and collects its output. Resolves with the exit code on any exit,
  * including non-zero; rejects when the binary cannot start, the timeout passes, or `signal` aborts.
+ * A timed-out or aborted child gets SIGTERM, then SIGKILL after `killGraceMs`.
  */
 export function execPluginCommand(
   command: string,
   args: string[],
   options: PluginExecOptions = {},
+  killGraceMs = DEFAULT_KILL_GRACE_MS,
 ): Promise<PluginExecResult> {
   return new Promise((resolve, reject) => {
     if (options.signal?.aborted) {
@@ -45,9 +48,15 @@ export function execPluginCommand(
       finish();
     };
 
+    // Rejects right away, then escalates to SIGKILL if the child ignores SIGTERM.
     const killWith = (error: Error): void => {
       settle(() => reject(error));
       child.kill('SIGTERM');
+      const forceKill = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }, killGraceMs);
+      forceKill.unref();
+      child.once('exit', () => clearTimeout(forceKill));
     };
 
     function onAbort(): void {

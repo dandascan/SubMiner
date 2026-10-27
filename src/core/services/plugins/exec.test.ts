@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 import { execPluginCommand } from './exec';
 
@@ -52,6 +56,50 @@ test('aborting kills the child and rejects with AbortError', async () => {
 
   await assert.rejects(pending, { name: 'AbortError' });
 });
+
+test('force-kills a child that ignores SIGTERM after the grace period', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX signals only');
+  const pidFile = path.join(await mkdtemp(path.join(os.tmpdir(), 'plugin-exec-')), 'pid');
+  const controller = new AbortController();
+  const pending = execPluginCommand(
+    runtime,
+    [
+      '-e',
+      `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`,
+    ],
+    { signal: controller.signal },
+    100,
+  );
+
+  let pid = 0;
+  for (let i = 0; i < 100 && !pid; i += 1) {
+    pid = Number(await readFile(pidFile, 'utf8').catch(() => '0'));
+    if (!pid) await sleep(20);
+  }
+  assert.ok(pid > 0, 'child never reported its pid');
+  try {
+    controller.abort();
+    await assert.rejects(pending, { name: 'AbortError' });
+    let alive = true;
+    for (let i = 0; i < 100 && alive; i += 1) {
+      await sleep(20);
+      alive = isRunning(pid);
+    }
+    assert.equal(alive, false, 'child survived SIGTERM');
+  } finally {
+    if (isRunning(pid)) process.kill(pid, 'SIGKILL');
+    await rm(path.dirname(pidFile), { recursive: true, force: true });
+  }
+});
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 test('rejects when the binary does not exist', async () => {
   await assert.rejects(
