@@ -279,6 +279,30 @@ test('events follow a replacement mpv client', async () => {
   }
 });
 
+test('unload waits for an in-progress load so late plugins are unloaded too', async () => {
+  const h = createHarness({ late: enabled() });
+  const client = createFakeMpvClient();
+  try {
+    writePlugin(h.root, 'late', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = (ctx) => {
+        ctx.mpv.on('pause-change', () => ctx.notify('still listening'));
+        return () => ctx.notify('deactivated');
+      };`,
+    });
+    h.host.attachMpvClient(client);
+
+    // The plugin is still reading its manifest when unload starts.
+    void h.host.loadAll();
+    await h.host.unloadAll();
+    client.emit('pause-change', { paused: true });
+
+    assert.deepEqual(h.notifications, ['deactivated']);
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('runAction waits for a load that is still in progress', async () => {
   const h = createHarness({ slow: enabled() });
   try {

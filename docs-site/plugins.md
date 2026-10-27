@@ -67,7 +67,7 @@ A plugin folder needs a `plugin.json`:
 { "name": "My Plugin", "version": "1.0.0", "main": "main.js" }
 ```
 
-`main` points to a CommonJS module (`.js`) or an ES module (`.mjs`) that exports `activate(ctx)`. It may return a cleanup function, or the module can export `deactivate()`. On quit, SubMiner waits up to 3 seconds for it, including any promise it returns. Everything a plugin registers through `ctx` (listeners, timers, actions, panels, running programs) is cleaned up automatically when SubMiner quits.
+`main` points to a CommonJS module (`.js`) or an ES module (`.mjs`) that exports `activate(ctx)`. It may return a cleanup function, or the module can export `deactivate()`. On quit, SubMiner waits up to 2 seconds for it, including any promise it returns. Everything a plugin registers through `ctx` (listeners, timers, actions, panels, running programs) is cleaned up automatically when SubMiner quits.
 
 ```js
 function activate(ctx) {

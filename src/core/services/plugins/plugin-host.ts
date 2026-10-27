@@ -25,8 +25,11 @@ import {
 const MIN_TIMER_INTERVAL_MS = 100;
 const DEFAULT_WINDOW_WIDTH = 960;
 const DEFAULT_WINDOW_HEIGHT = 720;
-// Quit waits for unloadAll, so a deactivate that never settles must not hold the app open.
-const DEFAULT_DEACTIVATE_TIMEOUT_MS = 3_000;
+/**
+ * Quit waits for unloadAll, so a load or deactivate that never settles must not hold the app open.
+ * The forced-exit fallback in main adds its own budget on top of this.
+ */
+export const PLUGIN_DEACTIVATE_TIMEOUT_MS = 2_000;
 
 interface MpvClientEvents {
   on: (event: PluginMpvEventName, listener: (payload: unknown) => void) => void;
@@ -54,7 +57,7 @@ export interface PluginHostDeps<TUnstable> {
   /** Test seam; defaults to Node's `require`, which also loads synchronous ES modules. */
   loadModule?: (entryPath: string) => PluginModule;
   exec?: typeof execPluginCommand;
-  /** How long unload waits for each plugin's deactivate before disposing it anyway. */
+  /** How long unload waits, in total, for loading and deactivate before disposing anyway. */
   deactivateTimeoutMs?: number;
 }
 
@@ -64,6 +67,21 @@ interface LoadedPlugin {
   deactivate: (() => unknown) | null;
   /** Aborted on unload so in-flight `exec` children die with the plugin. */
   lifetime: AbortController;
+}
+
+/** Resolves when `promise` settles, or rejects once `timeoutMs` passes first. */
+async function settleWithin(promise: Promise<unknown>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -352,27 +370,31 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
     },
 
     async unloadAll(): Promise<void> {
+      // One budget covers the load wait and every deactivate, so quit is bounded by it.
+      const timeoutMs = deps.deactivateTimeoutMs ?? PLUGIN_DEACTIVATE_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
+      // Plugins still reading their files are not in `plugins` yet; let the load finish first.
+      if (loadPromise) {
+        try {
+          await settleWithin(loadPromise, timeoutMs);
+        } catch (error) {
+          deps
+            .createLogger('plugins')
+            .warn(`Unloading before load finished: ${errorMessage(error)}`);
+        }
+      }
       loadPromise = null;
-      const timeoutMs = deps.deactivateTimeoutMs ?? DEFAULT_DEACTIVATE_TIMEOUT_MS;
       await Promise.all(
         [...plugins.values()].map(async (plugin) => {
-          let timer: ReturnType<typeof setTimeout> | undefined;
           try {
-            await Promise.race([
+            await settleWithin(
               Promise.resolve().then(() => plugin.deactivate?.()),
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(
-                  () => reject(new Error(`timed out after ${timeoutMs} ms`)),
-                  timeoutMs,
-                );
-              }),
-            ]);
+              Math.max(0, deadline - Date.now()),
+            );
           } catch (error) {
             deps
               .createLogger(`plugin:${plugin.id}`)
               .error(`deactivate failed: ${errorMessage(error)}`);
-          } finally {
-            clearTimeout(timer);
           }
           disposePlugin(plugin);
         }),

@@ -63,10 +63,13 @@ export function createOnWillQuitCleanupHandler(deps: {
 }) {
   return async (): Promise<void> => {
     const cleanupErrors: unknown[] = [];
-    // Plugins deactivate first, while the app is still intact; the host bounds how long that takes.
-    const unloadPlugins = (async () => deps.unloadPlugins())().catch((error: unknown) => {
+    // Plugins deactivate before any teardown so they can still reach mpv and the overlay;
+    // the plugin host bounds how long that takes.
+    try {
+      await deps.unloadPlugins();
+    } catch (error) {
       cleanupErrors.push(error);
-    });
+    }
     deps.destroyTray();
     deps.stopConfigHotReload();
     deps.restorePreviousSecondarySubVisibility();
@@ -123,7 +126,6 @@ export function createOnWillQuitCleanupHandler(deps: {
     deps.cleanupRemoteMediaWindows();
     deps.stopDiscordPresenceService();
     await stopSyncAutoScheduler;
-    await unloadPlugins;
     if (cleanupErrors.length > 0) {
       throw cleanupErrors[0];
     }

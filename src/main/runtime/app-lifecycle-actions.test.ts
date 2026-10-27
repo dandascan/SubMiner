@@ -100,7 +100,7 @@ test('on will quit cleanup handler flushes before teardown and awaits stats befo
   assert.ok(calls.indexOf('destroyImmersionTracker') < calls.indexOf('destroyAnkiIntegration'));
 });
 
-test('on will quit cleanup handler starts plugin unload first and waits for it to settle', async () => {
+test('on will quit cleanup handler finishes plugin unload before any other teardown', async () => {
   const calls: string[] = [];
   let finishUnload!: () => void;
   const cleanup = createOnWillQuitCleanupHandler(
@@ -117,12 +117,28 @@ test('on will quit cleanup handler starts plugin unload first and waits for it t
     settled = true;
   });
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(calls[0], 'unloadPlugins');
+  assert.deepEqual(calls, ['unloadPlugins']);
   assert.equal(settled, false);
 
   finishUnload();
   await pending;
   assert.equal(settled, true);
+  assert.ok(calls.indexOf('destroyMpvSocket') > 0);
+});
+
+test('on will quit cleanup handler keeps tearing down when plugin unload fails', async () => {
+  const calls: string[] = [];
+  const cleanup = createOnWillQuitCleanupHandler(
+    makeCleanupDeps(calls, {
+      unloadPlugins: async () => {
+        throw new Error('unload failed');
+      },
+    }),
+  );
+
+  await assert.rejects(cleanup(), /unload failed/);
+  assert.ok(calls.includes('destroyMpvSocket'));
+  assert.ok(calls.includes('stopDiscordPresenceService'));
 });
 
 test('on will quit cleanup handler cleans subtitle caches when stopping remote session fails', async () => {

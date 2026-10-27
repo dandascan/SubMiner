@@ -512,7 +512,10 @@ import { openSubsyncManualModal as openSubsyncManualModalRuntime } from './main/
 import { openSessionHelpModal as openSessionHelpModalRuntime } from './main/runtime/session-help-open';
 import { openChangelogModal as openChangelogModalRuntime } from './main/runtime/changelog-open';
 import { createChangelogRuntime } from './main/runtime/changelog/changelog-runtime';
-import { createPluginHost } from './core/services/plugins/plugin-host';
+import {
+  createPluginHost,
+  PLUGIN_DEACTIVATE_TIMEOUT_MS,
+} from './core/services/plugins/plugin-host';
 import { buildPluginSubtitleContext } from './core/services/plugins/subtitle-context';
 import type { PluginSubtitleLine } from './core/services/plugins/types';
 import {
@@ -1054,6 +1057,7 @@ function requestAppQuit(): void {
     logger.warn('Failed to stop stats server while quitting.', error);
   });
   if (!forceQuitTimer) {
+    // Quit cleanup unloads plugins first, so allow their budget plus 2 s for the rest.
     forceQuitTimer = setTimeout(() => {
       logger.warn('App quit timed out; forcing process exit.');
       void createForceQuitHandler({
@@ -1061,7 +1065,7 @@ function requestAppQuit(): void {
         logError: (error) => logger.error('Failed to finalize stats before forced exit.', error),
         exit: () => app.exit(0),
       })();
-    }, 2000);
+    }, PLUGIN_DEACTIVATE_TIMEOUT_MS + 2000);
   }
   app.quit();
 }
