@@ -16,6 +16,8 @@ export interface AnkiConnectProxyServerDeps {
   shouldAutoUpdateNewCards: () => boolean;
   processNewCard: (noteId: number) => Promise<void>;
   recordCardsAdded?: (count: number, noteIds: number[]) => void;
+  /** Called once SubMiner is done with an added note: after enrichment, or right away when it is off. */
+  onCardsReady?: (noteIds: number[]) => void;
   trackAddedDuplicateNoteIds?: (noteId: number, duplicateNoteIds: number[]) => void;
   getDeck?: () => string | undefined;
   findNotes?: (
@@ -534,6 +536,7 @@ export class AnkiConnectProxyServer {
           this.pendingNoteIdSet.delete(noteId);
 
           if (!this.deps.shouldAutoUpdateNewCards()) {
+            this.deps.onCardsReady?.([noteId]);
             continue;
           }
 
@@ -547,6 +550,7 @@ export class AnkiConnectProxyServer {
             );
           } finally {
             this.inFlightNoteIds.delete(noteId);
+            this.deps.onCardsReady?.([noteId]);
           }
         }
       } finally {

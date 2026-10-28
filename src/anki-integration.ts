@@ -240,6 +240,7 @@ export class AnkiIntegration {
   private runtime: AnkiIntegrationRuntime;
   private aiConfig: AiConfig;
   private recordCardsMinedCallback: ((count: number, noteIds?: number[]) => void) | null = null;
+  private cardsReadyCallback: ((noteIds: number[]) => void) | null = null;
   private knownWordCacheUpdatedCallback: (() => void) | null = null;
   private consumeSubtitleMiningContextCallback: (() => SubtitleMiningContext | null) | null = null;
   private generateSentenceFuriganaCallback:
@@ -333,6 +334,14 @@ export class AnkiIntegration {
       this.recordCardsMinedCallback(count, noteIds);
     } catch (error) {
       log.warn(`recordCardsMined callback failed during ${source}:`, (error as Error).message);
+    }
+  }
+
+  private reportCardsReady(noteIds: number[]): void {
+    try {
+      this.cardsReadyCallback?.(noteIds);
+    } catch (error) {
+      log.warn('cardsReady callback failed:', (error as Error).message);
     }
   }
 
@@ -444,6 +453,7 @@ export class AnkiIntegration {
       recordCardsAdded: (count, noteIds) => {
         this.recordCardsMinedSafely(count, noteIds, 'polling');
       },
+      onCardsReady: (noteIds) => this.reportCardsReady(noteIds),
       isUpdateInProgress: () => this.updateInProgress,
       setUpdateInProgress: (value) => {
         this.updateInProgress = value;
@@ -468,6 +478,7 @@ export class AnkiIntegration {
       recordCardsAdded: (count, noteIds) => {
         this.recordCardsMinedSafely(count, noteIds, 'proxy');
       },
+      onCardsReady: (noteIds) => this.reportCardsReady(noteIds),
       trackAddedDuplicateNoteIds: (noteId, duplicateNoteIds) => {
         this.trackDuplicateNoteIdsForNote(noteId, duplicateNoteIds);
       },
@@ -593,6 +604,7 @@ export class AnkiIntegration {
       recordCardsMinedCallback: (count, noteIds) => {
         this.recordCardsMinedSafely(count, noteIds, 'card creation');
       },
+      onCardsReady: (noteIds) => this.reportCardsReady(noteIds),
       reviewMediaTiming: (request) => this.reviewMediaTiming(request),
     });
   }
@@ -1778,6 +1790,14 @@ export class AnkiIntegration {
     callback: ((count: number, noteIds?: number[]) => void) | null,
   ): void {
     this.recordCardsMinedCallback = callback;
+  }
+
+  /**
+   * Called once SubMiner has finished writing a mined card (fields and media), or as soon as polling
+   * sees it when auto-update is off. Field grouping may have merged the note away by then.
+   */
+  setCardsReadyCallback(callback: ((noteIds: number[]) => void) | null): void {
+    this.cardsReadyCallback = callback;
   }
 
   setKnownWordCacheUpdatedCallback(callback: (() => void) | null): void {

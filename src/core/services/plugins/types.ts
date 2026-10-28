@@ -42,6 +42,21 @@ export const PLUGIN_MPV_EVENT_NAMES = [
   'end-file',
 ] as const satisfies readonly PluginMpvEventName[];
 
+/** Anki events plugins may observe. */
+export interface PluginAnkiEventMap {
+  /**
+   * SubMiner finished writing a mined card, or polling saw it while auto-update is off.
+   * Field grouping may have merged the note into another one by the time this fires.
+   */
+  'card-mined': { noteIds: number[] };
+}
+export type PluginAnkiEventName = keyof PluginAnkiEventMap;
+
+export interface PluginAnkiInvokeOptions {
+  /** Request timeout; AnkiConnect's default is 10 seconds. */
+  timeoutMs?: number;
+}
+
 export interface PluginSubtitleLine {
   text: string;
   /** Seconds on the subtitle file's timeline; null when mpv did not report timing. */
@@ -149,6 +164,18 @@ export interface PluginContext<TUnstable = unknown> {
     getProperty: (name: string) => Promise<unknown>;
     /** Connects to mpv, launching an idle mpv if none is running. Resolves false when that fails. */
     ensureRunning: () => Promise<boolean>;
+  };
+  readonly anki: {
+    on: <E extends PluginAnkiEventName>(
+      event: E,
+      listener: (payload: PluginAnkiEventMap[E]) => unknown,
+    ) => Disposer;
+    /** Sends one AnkiConnect action to the configured `ankiConnect.url`. Rejects on an Anki error. */
+    invoke: (
+      action: string,
+      params?: Record<string, unknown>,
+      options?: PluginAnkiInvokeOptions,
+    ) => Promise<unknown>;
   };
   readonly subtitles: {
     current: () => PluginSubtitleLine | null;

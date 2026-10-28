@@ -59,6 +59,19 @@ The repository ships [`assets/plugins/ai-explain`](https://github.com/ksyasuda/S
 
 Press `Esc` to close the panel. Closing it, or starting another request, stops the running Codex process.
 
+## Example: sync Anki after mining
+
+[`assets/plugins/anki-sync`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/anki-sync) runs AnkiConnect's `sync` after you mine cards, so they reach AnkiWeb without opening Anki. It waits until you stop mining for a while, so a burst of cards becomes one sync. It also adds a `sync` action you can bind to a key.
+
+| Setting     | Default | What it does                                            |
+| ----------- | ------- | ------------------------------------------------------- |
+| `delayMs`   | `30000` | Sync after no card has been mined for this long         |
+| `syncOnEnd` | `true`  | Sync right away when playback ends or mpv quits         |
+| `timeoutMs` | `60000` | Give up on a sync after this long                       |
+| `notify`    | `true`  | Show a notification after each sync. Failures always do |
+
+Anki must be running and logged in to AnkiWeb. Cards mined from the stats dashboard don't trigger a sync.
+
 ## Write a plugin
 
 A plugin folder needs a `plugin.json`:
@@ -97,6 +110,8 @@ An error thrown by a plugin is logged and does not crash SubMiner. A plugin that
 | `mpv.getProperty(name)`                | Read an mpv property (Promise)                                                                                            |
 | `mpv.connected`                        | Whether mpv is connected                                                                                                  |
 | `mpv.ensureRunning()`                  | Connect to mpv, starting an idle mpv if none is running. Resolves `false` if that fails                                   |
+| `anki.on(event, fn)`                   | Listen to Anki events (below). Returns an unsubscribe function                                                            |
+| `anki.invoke(action, params, options)` | Send an AnkiConnect action to `ankiConnect.url`, e.g. `('sync')`. Resolves its result (below)                             |
 | `subtitles.current()`                  | The displayed line as `{ text, startTime, endTime }`, or `null`                                                           |
 | `subtitles.context({ before, after })` | `{ current, before, after }`. Neighbors come from the loaded subtitle file, or recent lines for streams                   |
 | `actions.register(name, fn)`           | Add an action, bindable as `__plugin-action:<id>/<name>`                                                                  |
@@ -114,3 +129,7 @@ A panel's `signal` aborts when the user closes it or another panel replaces it. 
 `ui.openWindow` takes `html` and an optional `preload`, both relative to the plugin folder, plus `title`, `width`, and `height`. Opening the same `html` again focuses the open window. The page runs with context isolation and no Node access. The preload is sandboxed too: it can `require('electron')` but nothing else, so bundle anything more into it. Expose what the page needs from the preload with `contextBridge`, and handle its messages with `ipcMain` from `require('electron')` in the plugin. Prefix channel names with the plugin id. Plugin windows close when SubMiner quits.
 
 mpv events: `connection-change`, `subtitle-change`, `subtitle-timing`, `time-pos-change`, `duration-change`, `pause-change`, `fullscreen-change`, `media-path-change`, `media-title-change`, `subtitle-track-change`, `subtitle-track-list-change`, `secondary-subtitle-change`, `secondary-subtitle-track-change`, `secondary-subtitle-delay-change`, `secondary-subtitle-visibility`, `client-message`, and `end-file`. `end-file` gives `{ reason, playlistEntryId, error }`, where `reason` is `eof`, `stop`, `quit`, `error`, `redirect`, or `unknown`.
+
+Anki events: `card-mined` gives `{ noteIds }` once SubMiner has finished filling in a mined card (sentence, audio, image). With `ankiConnect.behavior.autoUpdateNewCards` off, it fires as soon as polling sees the card, and not at all for cards added through the proxy. If field grouping merged the card into an older one, the id may no longer exist.
+
+`anki.invoke` takes `{ timeoutMs }` (default 10 seconds), rejects on an Anki error, and never retries, so an action like `sync` or `addNote` runs at most once.

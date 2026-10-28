@@ -67,6 +67,7 @@ function createHarness(
     sendMpvCommand: () => {},
     requestMpvProperty: async () => null,
     ensureMpvRunning: async () => true,
+    invokeAnkiConnect: async () => null,
     dispatchSessionAction: async (request) => {
       sessionActions.push(request);
     },
@@ -303,6 +304,31 @@ test('unload waits for an in-progress load so late plugins are unloaded too', as
   }
 });
 
+test('a plugin that finishes activating after unload gave up unloads itself', async () => {
+  const h = createHarness({ slow: enabled() }, { deactivateTimeoutMs: 20 });
+  const client = createFakeMpvClient();
+  try {
+    writePlugin(h.root, 'slow', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = async (ctx) => {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        ctx.mpv.on('pause-change', () => ctx.notify('still listening'));
+        return () => ctx.notify('deactivated');
+      };`,
+    });
+    h.host.attachMpvClient(client);
+
+    const loading = h.host.loadAll();
+    await h.host.unloadAll();
+    await loading;
+    client.emit('pause-change', { paused: true });
+
+    assert.deepEqual(h.notifications, ['deactivated']);
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('runAction waits for a load that is still in progress', async () => {
   const h = createHarness({ slow: enabled() });
   try {
@@ -341,6 +367,42 @@ test('each plugin gets its own data folder, created before activate', async () =
     assert.deepEqual(h.notifications, [expected]);
     assert.equal(existsSync(path.join(expected, 'state.json')), true);
     assert.deepEqual(h.errors, []);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('anki card-mined reaches listeners until unload, and invoke forwards to AnkiConnect', async () => {
+  const invoked: unknown[][] = [];
+  const h = createHarness(
+    { syncer: enabled() },
+    {
+      invokeAnkiConnect: async (...args) => {
+        invoked.push(args);
+        return 'synced';
+      },
+    },
+  );
+  try {
+    writePlugin(h.root, 'syncer', {
+      'plugin.json': JSON.stringify({ main: 'main.cjs' }),
+      'main.cjs': `exports.activate = (ctx) => {
+        ctx.anki.on('card-mined', async ({ noteIds }) => {
+          ctx.notify(noteIds.join(',') + ' ' + (await ctx.anki.invoke('sync', undefined, { timeoutMs: 5 })));
+        });
+      };`,
+    });
+    await h.host.loadAll();
+
+    h.host.emitAnkiEvent('card-mined', { noteIds: [1, 2] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(h.notifications, ['1,2 synced']);
+    assert.deepEqual(invoked, [['sync', {}, { timeoutMs: 5 }]]);
+
+    await h.host.unloadAll();
+    h.host.emitAnkiEvent('card-mined', { noteIds: [3] });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(h.notifications.length, 1);
   } finally {
     h.cleanup();
   }

@@ -31,6 +31,29 @@ test('CardCreationService counts locally created sentence cards', async () => {
   assert.deepEqual(minedCards, [{ count: 1, noteIds: [42] }]);
 });
 
+test('CardCreationService reports a created card ready after its fields are written', async () => {
+  const events: string[] = [];
+  const service = new CardCreationService(
+    createCardCreationDeps({
+      client: createFakeClient({
+        notesInfo: async () => [{ noteId: 42, fields: { Sentence: { value: 'existing' } } }],
+        updateNoteFields: async () => {
+          events.push('update');
+        },
+      }),
+      setCardTypeFields: (updatedFields) => {
+        updatedFields.CardType = 'sentence';
+      },
+      onCardsReady: (noteIds) => {
+        events.push(`ready ${noteIds.join(',')}`);
+      },
+    }),
+  );
+
+  assert.equal(await service.createSentenceCard('テスト', 0, 1), true);
+  assert.deepEqual(events, ['update', 'ready 42']);
+});
+
 const THROWING_HOOKS: Array<{
   name: string;
   hook: Partial<CardCreationDeps>;

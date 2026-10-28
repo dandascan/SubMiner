@@ -17,16 +17,22 @@ async function waitForCondition(
   throw new Error('Timed out waiting for condition');
 }
 
-test('proxy enqueues addNote result for enrichment', async () => {
+test('proxy enqueues addNote result for enrichment and reports it ready afterwards', async () => {
   const processed: number[] = [];
   const recordedCards: number[] = [];
+  const events: string[] = [];
   const proxy = new AnkiConnectProxyServer({
     shouldAutoUpdateNewCards: () => true,
     processNewCard: async (noteId) => {
       processed.push(noteId);
+      events.push(`process ${noteId}`);
+      throw new Error('enrichment failed');
     },
     recordCardsAdded: (count) => {
       recordedCards.push(count);
+    },
+    onCardsReady: (noteIds) => {
+      events.push(`ready ${noteIds.join(',')}`);
     },
     logInfo: () => undefined,
     logWarn: () => undefined,
@@ -42,9 +48,10 @@ test('proxy enqueues addNote result for enrichment', async () => {
     Buffer.from(JSON.stringify({ result: 42, error: null }), 'utf8'),
   );
 
-  await waitForCondition(() => processed.length === 1);
+  await waitForCondition(() => events.length === 2);
   assert.deepEqual(processed, [42]);
   assert.deepEqual(recordedCards, [1]);
+  assert.deepEqual(events, ['process 42', 'ready 42']);
 });
 
 test('proxy enqueues addNote bare numeric response for enrichment', async () => {

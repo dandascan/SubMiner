@@ -3151,6 +3151,18 @@ const pluginHost = createPluginHost({
     return await appState.mpvClient.requestProperty(name);
   },
   ensureMpvRunning: () => ensureMpvConnectedForPlayback(),
+  invokeAnkiConnect: (action, params, options) => {
+    const ankiConfig = configService.getConfig().ankiConnect;
+    const url = (
+      appState.runtimeOptionsManager?.getEffectiveAnkiConnectConfig(ankiConfig) ?? ankiConfig
+    ).url;
+    if (!url) return Promise.reject(new Error('ankiConnect.url is not configured.'));
+    // No retries: a retried `sync` or `addNote` could run twice.
+    return new AnkiConnectClient(url).invoke(action, params, {
+      timeout: options.timeoutMs,
+      maxRetries: 0,
+    });
+  },
   dispatchSessionAction: (request) => dispatchSessionAction(request),
   getCurrentSubtitle: () => getPluginCurrentSubtitle(),
   getSubtitleContext: (options) =>
@@ -5503,6 +5515,9 @@ function initializeOverlayRuntime(): void {
     overlayModalRuntime.primeModalWindow();
   }
   appState.ankiIntegration?.setRecordCardsMinedCallback(recordTrackedCardsMined);
+  appState.ankiIntegration?.setCardsReadyCallback((noteIds) =>
+    pluginHost.emitAnkiEvent('card-mined', { noteIds }),
+  );
   appState.ankiIntegration?.setKnownWordCacheUpdatedCallback(refreshCurrentSubtitleAnnotations);
   appState.ankiIntegration?.setSubtitleMiningContextConsumer(consumePendingSubtitleMiningContext);
   appState.ankiIntegration?.setMediaTimingReviewCallback(mediaTimingReviewRuntime.requestReview);

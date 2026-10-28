@@ -152,6 +152,8 @@ interface CardCreationDeps {
   trackLastAddedDuplicateNoteIds?: (noteId: number, duplicateNoteIds: number[]) => void;
   findDuplicateNoteIds?: (expression: string, noteInfo: CardCreationNoteInfo) => Promise<number[]>;
   recordCardsMinedCallback?: (count: number, noteIds?: number[]) => void;
+  /** Called once a created card has all its fields and media written. */
+  onCardsReady?: (noteIds: number[]) => void;
   reviewMediaTiming?: (
     request: Omit<MediaTimingReviewRequest, 'audioPadding' | 'maxMediaDuration'>,
   ) => Promise<MediaTimingReviewDecision>;
@@ -608,6 +610,7 @@ export class CardCreationService {
       endTime = cappedEndTime;
     }
 
+    let createdNoteId: number | null = null;
     try {
       return await this.deps.withUpdateProgress('Creating sentence card', async () => {
         const timingDecision = this.deps.reviewMediaTiming
@@ -720,6 +723,7 @@ export class CardCreationService {
             fields,
             this.getConfiguredAnkiTags(),
           );
+          createdNoteId = noteId;
           log.info('Created sentence card:', noteId);
         } catch (error) {
           log.error('Failed to create sentence card:', (error as Error).message);
@@ -884,6 +888,8 @@ export class CardCreationService {
       log.error('Error creating sentence card:', (error as Error).message);
       this.deps.showUpdateResult(`Sentence card failed: ${(error as Error).message}`, false);
       return false;
+    } finally {
+      if (createdNoteId !== null) this.deps.onCardsReady?.([createdNoteId]);
     }
   }
 

@@ -9,6 +9,9 @@ import { execPluginCommand } from './exec';
 import { isValidPluginName, parsePluginManifest, resolvePluginFilePath } from './manifest';
 import {
   PLUGIN_MPV_EVENT_NAMES,
+  type PluginAnkiEventMap,
+  type PluginAnkiEventName,
+  type PluginAnkiInvokeOptions,
   type PluginConfigEntry,
   type PluginContext,
   type PluginLogger,
@@ -46,6 +49,11 @@ export interface PluginHostDeps<TUnstable> {
   sendMpvCommand: (command: (string | number)[]) => void;
   requestMpvProperty: (name: string) => Promise<unknown>;
   ensureMpvRunning: () => Promise<boolean>;
+  invokeAnkiConnect: (
+    action: string,
+    params: Record<string, unknown>,
+    options: PluginAnkiInvokeOptions,
+  ) => Promise<unknown>;
   dispatchSessionAction: (request: SessionActionDispatchRequest) => Promise<void>;
   getCurrentSubtitle: () => PluginSubtitleLine | null;
   getSubtitleContext: (options: { before?: number; after?: number }) => PluginSubtitleContext;
@@ -114,6 +122,8 @@ function pickExport<K extends 'activate' | 'deactivate'>(
 export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
   const mpvEvents = new EventEmitter();
   mpvEvents.setMaxListeners(0);
+  const ankiEvents = new EventEmitter();
+  ankiEvents.setMaxListeners(0);
   const plugins = new Map<string, LoadedPlugin>();
   const actions = new Map<string, { pluginId: string; handler: () => unknown }>();
   const loadModule = deps.loadModule ?? ((entryPath: string) => require(entryPath) as PluginModule);
@@ -123,6 +133,8 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
     forwarders: Map<string, (p: unknown) => void>;
   } | null = null;
   let loadPromise: Promise<void> | null = null;
+  // Set once unloadAll has picked the plugins to unload; anything that activates later cleans up itself.
+  let unloaded = false;
 
   function runGuarded(log: PluginLogger, label: string, callback: () => unknown): void {
     try {
@@ -195,6 +207,18 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
         command: (command) => deps.sendMpvCommand(command),
         getProperty: (name) => deps.requestMpvProperty(name),
         ensureRunning: () => deps.ensureMpvRunning(),
+      },
+      anki: {
+        on: (event, listener) => {
+          const wrapped = (payload: unknown): void =>
+            runGuarded(log, `anki ${event} listener`, () =>
+              listener(payload as Parameters<typeof listener>[0]),
+            );
+          ankiEvents.on(event, wrapped);
+          return track(() => ankiEvents.off(event, wrapped));
+        },
+        invoke: (action, params = {}, options = {}) =>
+          deps.invokeAnkiConnect(action, params, options),
       },
       subtitles: {
         current: () => deps.getCurrentSubtitle(),
@@ -318,6 +342,7 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
       deactivate: null,
       lifetime: new AbortController(),
     };
+    if (unloaded) return;
     plugins.set(id, plugin);
     try {
       const mod = loadModule(entryPath);
@@ -332,6 +357,13 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
         typeof returned === 'function'
           ? (returned as () => unknown)
           : pickExport(mod, 'deactivate');
+      if (unloaded) {
+        // activate outlasted unloadAll's wait, so unloadAll skipped or only half-disposed it.
+        log.warn('Activated after unload started; unloading it now.');
+        runGuarded(log, 'deactivate', () => plugin.deactivate?.());
+        disposePlugin(plugin);
+        return;
+      }
       const version = parsed.manifest.version ? ` v${parsed.manifest.version}` : '';
       log.info(`Loaded ${parsed.manifest.name}${version}.`);
     } catch (error) {
@@ -359,6 +391,11 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
       attachedClient = { client, forwarders };
     },
 
+    /** Delivers an Anki event to every plugin listening for it. */
+    emitAnkiEvent<E extends PluginAnkiEventName>(event: E, payload: PluginAnkiEventMap[E]): void {
+      ankiEvents.emit(event, payload);
+    },
+
     /** Loads every enabled plugin once; later calls return the first load. */
     loadAll(): Promise<void> {
       loadPromise ??= Promise.all(
@@ -384,6 +421,7 @@ export function createPluginHost<TUnstable>(deps: PluginHostDeps<TUnstable>) {
         }
       }
       loadPromise = null;
+      unloaded = true;
       await Promise.all(
         [...plugins.values()].map(async (plugin) => {
           try {
