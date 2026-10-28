@@ -72,6 +72,40 @@ Press `Esc` to close the panel. Closing it, or starting another request, stops t
 
 Anki must be running and logged in to AnkiWeb. Cards mined from the stats dashboard don't trigger a sync.
 
+## Example: tag cards with the episode
+
+[`assets/plugins/episode-tags`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/episode-tags) tags each mined card with the show and episode it came from, such as `show::Sousou_no_Frieren::E07`. It reads them from the file name (`[Group] Show - 07 (1080p).mkv`, `Show.S01E07.mkv`, `Show 第7話.mkv`), or from the title mpv shows for streams. Spaces become `_`.
+
+| Setting  | Default                  | What it does                                    |
+| -------- | ------------------------ | ----------------------------------------------- |
+| `tags`   | `["show::{show}::{ep}"]` | Tags to add, one template each                  |
+| `notify` | `false`                  | Show a notification with the tags for each card |
+
+Templates can use `{show}`, `{season}`, `{episode}`, and `{ep}` (`S01E07`, or `E07` when there is no season). When a placeholder has no value, the tag stops before that `::` level, so a movie gets `show::<title>`. The parsing is a guess from the name: a title ending in a number, like `Mob Psycho 100`, reads that number as the episode.
+
+## Example: open Jimaku when a file has no Japanese subtitles
+
+[`assets/plugins/auto-jimaku`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/auto-jimaku) opens the Jimaku search a few seconds after a file starts if none of its subtitle tracks is Japanese. A track counts as Japanese when its language code is in `languages`, or its title contains "Japanese" or 日本語.
+
+| Setting     | Default               | What it does                                                    |
+| ----------- | --------------------- | --------------------------------------------------------------- |
+| `action`    | `"openJimaku"`        | Built-in action to run, e.g. `openTsukihime`                    |
+| `languages` | `["ja", "jp", "jpn"]` | Track language codes that count as Japanese                     |
+| `delayMs`   | `3000`                | Wait this long after the file starts, so external subs load     |
+| `streams`   | `false`               | Also check `http(s)` streams, which Jimaku usually can't search |
+
+## Example: daily mining goal
+
+[`assets/plugins/mining-goal`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/mining-goal) counts the cards you mine each day and shows a notification when you reach your goal. Its `stats` action opens a panel with today's count, your streak of days at the goal, and the last 7 days. Counts are kept in `plugin-data/mining-goal/counts.json`.
+
+| Setting        | Default | What it does                                                        |
+| -------------- | ------- | ------------------------------------------------------------------- |
+| `goal`         | `10`    | Cards per day                                                       |
+| `dayStartHour` | `4`     | Cards mined before this hour count toward the day before, like Anki |
+| `notify`       | `true`  | Show a notification when you reach the goal                         |
+
+Only cards SubMiner mines count. Cards mined from the stats dashboard or added in Anki don't.
+
 ## Write a plugin
 
 A plugin folder needs a `plugin.json`:

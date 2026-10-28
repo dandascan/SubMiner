@@ -458,8 +458,10 @@ test('AnkiIntegration reports a card with queued YouTube media ready once the me
   integration.setCardsReadyCallback((noteIds) => events.push(`ready ${noteIds.join(',')}`));
   const internals = internalsOf(integration);
   internals.queuePendingYoutubeMediaUpdate(youtubeJob({ noteId: 101 }));
+  // Note 7 was merged into 101, so it waits on 101's media too.
+  internals.rememberMergedNoteIds(7, 101);
 
-  internals.reportCardsReady([101, 5]);
+  internals.reportCardsReady([101, 7, 5]);
   assert.deepEqual(events, ['ready 5']);
 
   await integration.handleYoutubeMediaCacheReady('https://youtu.be/abc123', '/tmp/media.mkv');

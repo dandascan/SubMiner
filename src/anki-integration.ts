@@ -344,9 +344,14 @@ export class AnkiIntegration {
       this.heldReadyNoteIds.push(...noteIds);
       return;
     }
-    // Notes still waiting on queued YouTube media are reported by the queue once it settles.
+    // Notes still waiting on queued YouTube media, directly or through the note they were
+    // merged into, are reported by the queue once it settles.
+    const queue = this.pendingYoutubeMediaQueue;
     this.emitCardsReady(
-      noteIds.filter((noteId) => !this.pendingYoutubeMediaQueue.hasPendingNote(noteId)),
+      noteIds.filter(
+        (noteId) =>
+          !queue.hasPendingNote(noteId) && !queue.hasPendingNote(this.resolveCurrentNoteId(noteId)),
+      ),
     );
   }
 
@@ -439,7 +444,7 @@ export class AnkiIntegration {
       showStatusNotification: (message) => this.showStatusNotification(message),
       showNotification: (noteId, label, errorSuffix) =>
         this.showNotification(noteId, label, errorSuffix),
-      onUpdateSettled: (noteId) => this.emitCardsReady([noteId]),
+      onUpdateSettled: (noteId) => this.reportCardsReady([noteId]),
       logInfo: (...args) => log.info(args[0] as string, ...args.slice(1)),
       logWarn: (...args) => log.warn(args[0] as string, ...args.slice(1)),
       logError: (...args) => log.error(args[0] as string, ...args.slice(1)),
