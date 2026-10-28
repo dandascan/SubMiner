@@ -274,6 +274,18 @@ test('AnkiIntegration resolves merged-away note ids to the kept note id', () => 
   assert.equal(integration.resolveCurrentNoteId(444), 444);
 });
 
+test('AnkiIntegration reports ready cards under the note that kept them after a merge', () => {
+  const integration = createIntegration({});
+  const ready: number[][] = [];
+  integration.setCardsReadyCallback((noteIds) => ready.push(noteIds));
+  const internals = internalsOf(integration);
+  internals.rememberMergedNoteIds(111, 222);
+
+  internals.reportCardsReady([111, 222, 444]);
+
+  assert.deepEqual(ready, [[222, 444]]);
+});
+
 // --- Sentence highlighting --------------------------------------------------
 
 const MPV_SENTENCE = '先日 貴様らが潜入した キールダンジョンから―';

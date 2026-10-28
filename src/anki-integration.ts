@@ -352,8 +352,10 @@ export class AnkiIntegration {
 
   private emitCardsReady(noteIds: number[]): void {
     if (noteIds.length === 0) return;
+    // Field grouping may have merged a note away; report the note that kept its content.
+    const currentNoteIds = [...new Set(noteIds.map((noteId) => this.resolveCurrentNoteId(noteId)))];
     try {
-      this.cardsReadyCallback?.(noteIds);
+      this.cardsReadyCallback?.(currentNoteIds);
     } catch (error) {
       log.warn('cardsReady callback failed:', (error as Error).message);
     }
@@ -1821,7 +1823,7 @@ export class AnkiIntegration {
   /**
    * Called once SubMiner has finished writing a mined card (fields, media including queued YouTube
    * media, and field grouping), or as soon as polling or the proxy sees it when auto-update is off.
-   * Field grouping may have merged the note away by then.
+   * Ids merged away by field grouping are reported as the note that kept them.
    */
   setCardsReadyCallback(callback: ((noteIds: number[]) => void) | null): void {
     this.cardsReadyCallback = callback;
