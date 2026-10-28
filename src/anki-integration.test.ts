@@ -82,6 +82,7 @@ type IntegrationInternals = {
     fields: Record<string, { value: string }>;
   }) => void;
   rememberMergedNoteIds: (deletedNoteId: number, keptNoteId: number) => void;
+  reportCardsReady: (noteIds: number[]) => void;
 };
 
 /** Named stand-ins for AnkiIntegration's long positional constructor arguments. */
@@ -402,6 +403,55 @@ test('AnkiIntegration triggers field grouping after a local duplicate sentence c
 
   assert.equal(await integration.createSentenceCard('duplicate sentence', 0, 1), true);
   assert.equal(groupingTriggered, 1);
+});
+
+test('AnkiIntegration reports a new sentence card ready only after field grouping', async () => {
+  const integration = createIntegration({
+    isKiku: { enabled: true, fieldGrouping: 'manual' },
+  });
+  const events: string[] = [];
+  integration.setCardsReadyCallback((noteIds) => events.push(`ready ${noteIds.join(',')}`));
+  const internals = internalsOf(integration);
+  internals.cardCreationService = {
+    createSentenceCard: async () => {
+      integration.trackDuplicateNoteIdsForNote(42, [7]);
+      internals.reportCardsReady([42]);
+      return true;
+    },
+  };
+  internals.fieldGroupingService = {
+    triggerFieldGroupingForLastAddedCard: async () => {
+      events.push('group');
+    },
+  };
+
+  assert.equal(await integration.createSentenceCard('duplicate sentence', 0, 1), true);
+  assert.deepEqual(events, ['group', 'ready 42']);
+});
+
+test('AnkiIntegration reports a card with queued YouTube media ready once the media lands', async () => {
+  const events: string[] = [];
+  const integration = createIntegration({
+    fields: { audio: 'ExpressionAudio', image: 'Picture' },
+    media: { imageFormat: 'jpg' },
+    behavior: { notificationType: 'osd' },
+  });
+  installFakeAnki(integration, {
+    noteFieldNames: ['ExpressionAudio', 'Picture'],
+    mediaGenerator: {
+      generateAudio: async () => Buffer.from('audio'),
+      generateScreenshot: async () => Buffer.from('image'),
+    },
+  });
+  integration.setCardsReadyCallback((noteIds) => events.push(`ready ${noteIds.join(',')}`));
+  const internals = internalsOf(integration);
+  internals.queuePendingYoutubeMediaUpdate(youtubeJob({ noteId: 101 }));
+
+  internals.reportCardsReady([101, 5]);
+  assert.deepEqual(events, ['ready 5']);
+
+  await integration.handleYoutubeMediaCacheReady('https://youtu.be/abc123', '/tmp/media.mkv');
+  assert.deepEqual(events, ['ready 5', 'ready 101']);
 });
 
 test('AnkiIntegration marks partial update notifications as failures in OSD mode', async () => {

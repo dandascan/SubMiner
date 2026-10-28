@@ -241,6 +241,8 @@ export class AnkiIntegration {
   private aiConfig: AiConfig;
   private recordCardsMinedCallback: ((count: number, noteIds?: number[]) => void) | null = null;
   private cardsReadyCallback: ((noteIds: number[]) => void) | null = null;
+  // Ready reports collected while createSentenceCard still has field grouping to run.
+  private heldReadyNoteIds: number[] | null = null;
   private knownWordCacheUpdatedCallback: (() => void) | null = null;
   private consumeSubtitleMiningContextCallback: (() => SubtitleMiningContext | null) | null = null;
   private generateSentenceFuriganaCallback:
@@ -338,6 +340,18 @@ export class AnkiIntegration {
   }
 
   private reportCardsReady(noteIds: number[]): void {
+    if (this.heldReadyNoteIds) {
+      this.heldReadyNoteIds.push(...noteIds);
+      return;
+    }
+    // Notes still waiting on queued YouTube media are reported by the queue once it settles.
+    this.emitCardsReady(
+      noteIds.filter((noteId) => !this.pendingYoutubeMediaQueue.hasPendingNote(noteId)),
+    );
+  }
+
+  private emitCardsReady(noteIds: number[]): void {
+    if (noteIds.length === 0) return;
     try {
       this.cardsReadyCallback?.(noteIds);
     } catch (error) {
@@ -423,6 +437,7 @@ export class AnkiIntegration {
       showStatusNotification: (message) => this.showStatusNotification(message),
       showNotification: (noteId, label, errorSuffix) =>
         this.showNotification(noteId, label, errorSuffix),
+      onUpdateSettled: (noteId) => this.emitCardsReady([noteId]),
       logInfo: (...args) => log.info(args[0] as string, ...args.slice(1)),
       logWarn: (...args) => log.warn(args[0] as string, ...args.slice(1)),
       logError: (...args) => log.error(args[0] as string, ...args.slice(1)),
@@ -1555,25 +1570,36 @@ export class AnkiIntegration {
     secondarySubText?: string,
   ): Promise<boolean> {
     const trackedDuplicateNoteIdsBeforeCreate = new Set(this.trackedDuplicateNoteIds.keys());
-    const created = await this.cardCreationService.createSentenceCard(
-      sentence,
-      startTime,
-      endTime,
-      secondarySubText,
-    );
-    if (
-      created &&
-      this.shouldTriggerFieldGroupingAfterLocalSentenceCardCreate(
-        trackedDuplicateNoteIdsBeforeCreate,
-      )
-    ) {
-      try {
-        await this.fieldGroupingService.triggerFieldGroupingForLastAddedCard();
-      } catch (error) {
-        log.warn('Failed to trigger field grouping after sentence card creation:', error);
+    // Field grouping below can still rewrite the new card, so hold its ready report until then.
+    const ownsHold = this.heldReadyNoteIds === null;
+    if (ownsHold) this.heldReadyNoteIds = [];
+    try {
+      const created = await this.cardCreationService.createSentenceCard(
+        sentence,
+        startTime,
+        endTime,
+        secondarySubText,
+      );
+      if (
+        created &&
+        this.shouldTriggerFieldGroupingAfterLocalSentenceCardCreate(
+          trackedDuplicateNoteIdsBeforeCreate,
+        )
+      ) {
+        try {
+          await this.fieldGroupingService.triggerFieldGroupingForLastAddedCard();
+        } catch (error) {
+          log.warn('Failed to trigger field grouping after sentence card creation:', error);
+        }
+      }
+      return created;
+    } finally {
+      if (ownsHold) {
+        const held = this.heldReadyNoteIds ?? [];
+        this.heldReadyNoteIds = null;
+        this.reportCardsReady(held);
       }
     }
-    return created;
   }
 
   trackDuplicateNoteIdsForNote(noteId: number, duplicateNoteIds: number[]): void {
@@ -1793,8 +1819,9 @@ export class AnkiIntegration {
   }
 
   /**
-   * Called once SubMiner has finished writing a mined card (fields and media), or as soon as polling
-   * sees it when auto-update is off. Field grouping may have merged the note away by then.
+   * Called once SubMiner has finished writing a mined card (fields, media including queued YouTube
+   * media, and field grouping), or as soon as polling or the proxy sees it when auto-update is off.
+   * Field grouping may have merged the note away by then.
    */
   setCardsReadyCallback(callback: ((noteIds: number[]) => void) | null): void {
     this.cardsReadyCallback = callback;

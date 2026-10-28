@@ -54,6 +54,40 @@ test('proxy enqueues addNote result for enrichment and reports it ready afterwar
   assert.deepEqual(events, ['process 42', 'ready 42']);
 });
 
+test('proxy reports an added note ready right away when auto-update is off', () => {
+  const processed: number[] = [];
+  const recordedCards: number[] = [];
+  const ready: number[][] = [];
+  const proxy = new AnkiConnectProxyServer({
+    shouldAutoUpdateNewCards: () => false,
+    processNewCard: async (noteId) => {
+      processed.push(noteId);
+    },
+    recordCardsAdded: (count) => {
+      recordedCards.push(count);
+    },
+    onCardsReady: (noteIds) => {
+      ready.push(noteIds);
+    },
+    logInfo: () => undefined,
+    logWarn: () => undefined,
+    logError: () => undefined,
+  });
+
+  (
+    proxy as unknown as {
+      maybeEnqueueFromRequest: (request: Record<string, unknown>, responseBody: Buffer) => void;
+    }
+  ).maybeEnqueueFromRequest(
+    { action: 'addNote' },
+    Buffer.from(JSON.stringify({ result: 42, error: null }), 'utf8'),
+  );
+
+  assert.deepEqual(ready, [[42]]);
+  assert.deepEqual(processed, []);
+  assert.deepEqual(recordedCards, []);
+});
+
 test('proxy enqueues addNote bare numeric response for enrichment', async () => {
   const processed: number[] = [];
   const proxy = new AnkiConnectProxyServer({

@@ -152,7 +152,7 @@ interface CardCreationDeps {
   trackLastAddedDuplicateNoteIds?: (noteId: number, duplicateNoteIds: number[]) => void;
   findDuplicateNoteIds?: (expression: string, noteInfo: CardCreationNoteInfo) => Promise<number[]>;
   recordCardsMinedCallback?: (count: number, noteIds?: number[]) => void;
-  /** Called once a created card has all its fields and media written. */
+  /** Called once card creation is done writing a card; queued YouTube media may still be pending. */
   onCardsReady?: (noteIds: number[]) => void;
   reviewMediaTiming?: (
     request: Omit<MediaTimingReviewRequest, 'audioPadding' | 'maxMediaDuration'>,

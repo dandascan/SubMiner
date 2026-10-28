@@ -89,6 +89,9 @@ export class PollingRunner {
           for (const noteId of newNoteIds) {
             try {
               await this.deps.processNewCard(noteId);
+            } catch (error) {
+              // One failed note must not leave the rest of the batch unprocessed.
+              this.deps.logWarn(`Failed to auto-enrich note ${noteId}:`, (error as Error).message);
             } finally {
               this.deps.onCardsReady?.([noteId]);
             }

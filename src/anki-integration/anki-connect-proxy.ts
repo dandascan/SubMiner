@@ -218,15 +218,17 @@ export class AnkiConnectProxyServer {
     requestJson: Record<string, unknown> | null,
     responseBody: Buffer,
   ): void {
-    if (!requestJson || !this.deps.shouldAutoUpdateNewCards()) {
+    if (!requestJson) {
       return;
     }
+    const autoUpdate = this.deps.shouldAutoUpdateNewCards();
 
     const action =
       typeof requestJson.action === 'string'
         ? requestJson.action
         : String(requestJson.action ?? '');
     if (action === 'updateNoteFields') {
+      if (!autoUpdate) return;
       const params = requestJson.params;
       if (
         !params ||
@@ -279,7 +281,12 @@ export class AnkiConnectProxyServer {
       params.subminerEnrich === false
     ) {
       // Stats owns the saved sentence and media; the live mpv context is unrelated.
-      if (noteIds.length > 0) this.deps.recordCardsAdded?.(noteIds.length, noteIds);
+      if (autoUpdate && noteIds.length > 0) this.deps.recordCardsAdded?.(noteIds.length, noteIds);
+      return;
+    }
+    if (!autoUpdate) {
+      // Nothing to enrich, so the added notes are already in their final state.
+      if (noteIds.length > 0) this.deps.onCardsReady?.(noteIds);
       return;
     }
     this.maybeTrackDuplicateNoteIds(requestJson, action, responseResult);
