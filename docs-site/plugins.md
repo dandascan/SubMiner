@@ -74,7 +74,7 @@ Anki must be running and logged in to AnkiWeb. Cards mined from the stats dashbo
 
 ## Example: tag cards with the episode
 
-[`assets/plugins/episode-tags`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/episode-tags) tags each mined card with the show and episode it came from, such as `show::Sousou_no_Frieren::E07`. It reads them from the file name (`[Group] Show - 07 (1080p).mkv`, `Show.S01E07.mkv`, `Show 第7話.mkv`), or from the title mpv shows for streams. Spaces become `_`.
+[`assets/plugins/episode-tags`](https://github.com/ksyasuda/SubMiner/tree/main/assets/plugins/episode-tags) tags each mined card with the show and episode it came from, such as `show::Sousou_no_Frieren::E07`. It reads them from the file name (`[Group] Show - 07 (1080p).mkv`, `Show.S01E07.mkv`, `Show 第7話.mkv`), or from the title mpv shows for streams. Each card is tagged with the file that was playing when it was added, so a card that finishes later (YouTube media, field grouping) still gets its own episode, and cards added before the plugin started are left alone. Spaces become `_`.
 
 | Setting  | Default                  | What it does                                    |
 | -------- | ------------------------ | ----------------------------------------------- |

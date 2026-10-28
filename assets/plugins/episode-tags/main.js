@@ -59,11 +59,10 @@ function renderTag(template, values) {
   return levels.join('::');
 }
 
-async function currentMediaName(ctx) {
-  const [mediaPath, title] = await Promise.all([
-    ctx.mpv.getProperty('path'),
-    ctx.mpv.getProperty('media-title'),
-  ]);
+// Files remembered for matching cards to what was playing; older cards are not tagged.
+const MAX_HISTORY = 50;
+
+function mediaName(mediaPath, title) {
   // A stream URL's last segment is usually an id, so streams use the title mpv shows.
   if (typeof mediaPath === 'string' && mediaPath && !/^[a-z]+:\/\//i.test(mediaPath)) {
     return path.basename(mediaPath);
@@ -71,38 +70,76 @@ async function currentMediaName(ctx) {
   return typeof title === 'string' && title ? title : null;
 }
 
+function renderTags(templates, name) {
+  const { show, season, episode } = parseMediaName(name);
+  const ep = episode ? `${season ? `S${season}` : ''}E${episode}` : null;
+  const values = { show, season, episode, ep };
+  return [...new Set(templates.map((template) => renderTag(template, values)))].filter(Boolean);
+}
+
 function activate(ctx) {
   const settings = { ...DEFAULT_SETTINGS, ...ctx.settings };
+  // Files played since activation, oldest first. An Anki note id is the time the note was
+  // added in milliseconds, so each card is tagged with the file playing when it was added,
+  // even when card-mined fires after playback moved on (YouTube media, field grouping).
+  const history = [];
+
+  function remember(mediaPath, since) {
+    history.push({ since, path: mediaPath || null, title: null });
+    if (history.length > MAX_HISTORY) history.shift();
+  }
+
+  function nameAt(noteId) {
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      const entry = history[i];
+      if (entry.since <= noteId) return mediaName(entry.path, entry.title);
+    }
+    return null;
+  }
+
+  ctx.mpv.on('media-path-change', ({ path: mediaPath }) => remember(mediaPath, Date.now()));
+  // SubMiner reads the title back after each path change, so it lands on the new file.
+  ctx.mpv.on('media-title-change', ({ title }) => {
+    const latest = history.at(-1);
+    if (latest) latest.title = title;
+  });
+
+  // A file may already be playing when the plugin starts.
+  const startedAt = Date.now();
+  Promise.all([ctx.mpv.getProperty('path'), ctx.mpv.getProperty('media-title')])
+    .then(([mediaPath, title]) => {
+      if (history.length > 0 || typeof mediaPath !== 'string' || !mediaPath) return;
+      remember(mediaPath, startedAt);
+      history[0].title = typeof title === 'string' ? title : null;
+    })
+    .catch((error) => ctx.log.debug(`Could not read the playing media: ${error.message}`));
 
   ctx.anki.on('card-mined', async ({ noteIds }) => {
-    if (noteIds.length === 0) return;
-    let name;
-    try {
-      name = await currentMediaName(ctx);
-    } catch (error) {
-      ctx.log.warn(`Could not read the playing media: ${error.message}`);
-      return;
-    }
-    if (!name) return;
-
-    const { show, season, episode } = parseMediaName(name);
-    const ep = episode ? `${season ? `S${season}` : ''}E${episode}` : null;
-    const values = { show, season, episode, ep };
-    const tags = [...new Set(settings.tags.map((template) => renderTag(template, values)))].filter(
-      Boolean,
-    );
-    if (tags.length === 0) {
-      ctx.log.debug(`No tags for "${name}".`);
-      return;
+    // Notes from the same file share one addTags call.
+    const notesByName = new Map();
+    for (const noteId of noteIds) {
+      const name = nameAt(noteId);
+      if (!name) {
+        ctx.log.debug(`Note ${noteId} was not added during a file SubMiner saw; not tagging it.`);
+        continue;
+      }
+      notesByName.set(name, [...(notesByName.get(name) ?? []), noteId]);
     }
 
-    try {
-      await ctx.anki.invoke('addTags', { notes: noteIds, tags: tags.join(' ') });
-      ctx.log.info(`Tagged ${noteIds.length} note(s): ${tags.join(' ')}`);
-      if (settings.notify) ctx.notify(`Tagged ${tags.join(' ')}`);
-    } catch (error) {
-      ctx.log.warn(`Tagging failed: ${error.message}`);
-      ctx.notify(`Episode tagging failed: ${error.message}`, { variant: 'error' });
+    for (const [name, notes] of notesByName) {
+      const tags = renderTags(settings.tags, name);
+      if (tags.length === 0) {
+        ctx.log.debug(`No tags for "${name}".`);
+        continue;
+      }
+      try {
+        await ctx.anki.invoke('addTags', { notes, tags: tags.join(' ') });
+        ctx.log.info(`Tagged ${notes.length} note(s): ${tags.join(' ')}`);
+        if (settings.notify) ctx.notify(`Tagged ${tags.join(' ')}`);
+      } catch (error) {
+        ctx.log.warn(`Tagging failed: ${error.message}`);
+        ctx.notify(`Episode tagging failed: ${error.message}`, { variant: 'error' });
+      }
     }
   });
 }

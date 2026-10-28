@@ -17,6 +17,8 @@ function activate(ctx) {
   const settings = { ...DEFAULT_SETTINGS, ...ctx.settings };
   const languages = new Set(settings.languages.map((lang) => lang.toLowerCase()));
   let cancelCheck = null;
+  // Bumped on every file change so a check still waiting on mpv knows it is stale.
+  let generation = 0;
 
   function hasJapaneseSubtitle(trackList) {
     return trackList.some(
@@ -27,13 +29,15 @@ function activate(ctx) {
     );
   }
 
-  async function check(mediaPath) {
+  async function check(mediaPath, checkGeneration) {
     cancelCheck = null;
     const [currentPath, trackList] = await Promise.all([
       ctx.mpv.getProperty('path'),
       ctx.mpv.getProperty('track-list'),
     ]);
-    // Another file started while we waited; its own check is already scheduled.
+    // Another file started while we waited, even if it was this one again; its own check is
+    // already scheduled.
+    if (checkGeneration !== generation) return;
     if (currentPath !== mediaPath || !Array.isArray(trackList)) return;
     if (hasJapaneseSubtitle(trackList)) return;
     ctx.log.info(`No Japanese subtitles for ${mediaPath}; running ${settings.action}.`);
@@ -41,11 +45,13 @@ function activate(ctx) {
   }
 
   ctx.mpv.on('media-path-change', ({ path: mediaPath }) => {
+    generation += 1;
     cancelCheck?.();
     cancelCheck = null;
     if (!mediaPath) return;
     if (!settings.streams && /^[a-z]+:\/\//i.test(mediaPath)) return;
-    cancelCheck = ctx.after(settings.delayMs, () => check(mediaPath));
+    const checkGeneration = generation;
+    cancelCheck = ctx.after(settings.delayMs, () => check(mediaPath, checkGeneration));
   });
 }
 
