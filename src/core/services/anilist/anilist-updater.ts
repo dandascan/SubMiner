@@ -273,6 +273,9 @@ export async function updateAnilistPostWatchProgress(
   let mediaId = pinnedMediaId;
   let resolvedTitle: string | null = null;
   let resolvedEpisodes: number | null = null;
+  // A missing list entry is only created when we trust the match; otherwise a fuzzy
+  // search hit would add an unrelated show to the user's list.
+  let confidentMatch = pinnedMediaId !== null;
 
   if (mediaId === null) {
     let resolution: Awaited<ReturnType<typeof resolveAnilistSeasonMedia>>;
@@ -312,6 +315,7 @@ export async function updateAnilistPostWatchProgress(
     mediaId = resolution.id;
     resolvedTitle = resolution.title;
     resolvedEpisodes = resolution.episodes;
+    confidentMatch = resolution.exactTitleMatch;
   }
 
   const entryResponse = await anilistGraphQl<AnilistMediaEntryData>(
@@ -358,7 +362,8 @@ export async function updateAnilistPostWatchProgress(
       : null);
 
   const entry = entryMedia?.mediaListEntry ?? null;
-  if (!entry || !isUpdateableListStatus(entry.status)) {
+  const createEntry = !entry && confidentMatch;
+  if (!createEntry && (!entry || !isUpdateableListStatus(entry.status))) {
     return {
       status: 'error',
       retryable: false,
@@ -366,7 +371,7 @@ export async function updateAnilistPostWatchProgress(
     };
   }
 
-  const currentProgress = entry.progress ?? 0;
+  const currentProgress = entry?.progress ?? 0;
   const shouldMarkCompleted = isKnownFinalEpisode(pickedEpisodes, episode);
   if (typeof currentProgress === 'number' && currentProgress >= episode && !shouldMarkCompleted) {
     return {
@@ -395,6 +400,15 @@ export async function updateAnilistPostWatchProgress(
   const saveError = firstErrorMessage(saveResponse);
   if (saveError) {
     return { status: 'error', message: `AniList update failed: ${saveError}` };
+  }
+
+  if (createEntry) {
+    return {
+      status: 'updated',
+      message: shouldMarkCompleted
+        ? `AniList added "${pickedTitle}" at episode ${episode} and marked it completed.`
+        : `AniList added "${pickedTitle}" to Watching at episode ${episode}.`,
+    };
   }
 
   return {
