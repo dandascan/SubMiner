@@ -4,7 +4,7 @@ import * as path from 'path';
 import { parseMediaInfo } from '../../../jimaku/utils';
 import { resolveMediaLookupTarget, sanitizeMediaTitle } from '../../../shared/media-identity';
 import type { AnilistRateLimiter } from './rate-limiter';
-import { resolveAnilistSeasonMedia } from './season-resolver';
+import { resolveAnilistSeasonMedia, stripSeasonSuffix } from './season-resolver';
 
 const ANILIST_GRAPHQL_URL = 'https://graphql.anilist.co';
 
@@ -315,7 +315,11 @@ export async function updateAnilistPostWatchProgress(
     mediaId = resolution.id;
     resolvedTitle = resolution.title;
     resolvedEpisodes = resolution.episodes;
-    confidentMatch = resolution.exactTitleMatch;
+    // With no parsed season, an exact match on a season-stripped title ("Show S2" ->
+    // "Show") only certifies the season 1 anchor, not the entry being watched.
+    const seasonMarkerStripped = stripSeasonSuffix(title).trim() !== title.trim();
+    confidentMatch =
+      resolution.exactTitleMatch && (resolution.requestedSeason !== null || !seasonMarkerStripped);
   }
 
   const entryResponse = await anilistGraphQl<AnilistMediaEntryData>(

@@ -509,6 +509,38 @@ test('updateAnilistPostWatchProgress does not add a loosely matched show missing
   }
 });
 
+test('updateAnilistPostWatchProgress does not add the season 1 entry when the title carries an unparsed season marker', async () => {
+  const originalFetch = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    if (call === 1) {
+      return createJsonResponse({
+        data: {
+          Page: {
+            media: [{ id: 33, episodes: 12, format: 'TV', title: { english: 'Demo Show' } }],
+          },
+        },
+      });
+    }
+    return createJsonResponse({
+      data: {
+        Media: { id: 33, mediaListEntry: null },
+      },
+    });
+  }) as typeof fetch;
+
+  try {
+    const result = await updateAnilistPostWatchProgress('token', 'Demo Show S2', 3);
+    assert.equal(result.status, 'error');
+    assert.equal(result.retryable, false);
+    assert.match(result.message, /not in your AniList Planning or Watching list/i);
+    assert.equal(call, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('updateAnilistPostWatchProgress resolves later seasons through the sequel chain', async () => {
   const originalFetch = globalThis.fetch;
   const searchTerms: string[] = [];
